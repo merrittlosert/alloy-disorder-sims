@@ -8,7 +8,7 @@ import numpy as np
 import constants
 
 @dataclass 
-class VerticalProfile():
+class VerticalProfile:
 
     interface_type: str # One of 'sharp', 'linear-wall', 'smoothed-linear-wall', 'sigmoid'
     bot_cap_si_concentration: float = 0.7
@@ -126,6 +126,8 @@ class VerticalProfile():
                 raise ValueError('Please specify a valid well type')
             
         self.z_arr = np.arange(self.n_layers) * constants.SI_LATTICE_CONSTANT/4
+        self.z_arr_nm = 1e9 * self.z_arr
+
         layers_arr = np.arange(self.n_layers)
 
         wiggle_period_ml = self.wiggle_period_nm / (1e9 * constants.SI_LATTICE_CONSTANT/4)
@@ -155,6 +157,23 @@ class VerticalProfile():
                     self.si_concentrations[i] -= self.wiggle_amplitude * (1/2) * (1 - np.cos(2 * np.pi * 1e9 * constants.SI_LATTICE_CONSTANT / 4 * (layers_arr[i] - x0) / self.wiggle_period_nm))
             
         self.ge_concentrations = 1 - self.si_concentrations
+
+
+
+    def generate_disordered_profile(self, dot_radius_nm):
+        """
+        Generate an effective disordered 1D concentration profile. The dot_radius is defined as sqrt(hbar / m_t / omega), where m_t is the transverse effective mass of Si 
+        and hbar * omega is the energy spacing of the dot's orbital levels.
+        """
+
+        # from sigma_delta, we compute an effective number of atoms for the si concentration in each layer.
+        n_eff = 4 * np.pi * dot_radius_nm**2 / (1e9 * constants.SI_LATTICE_CONSTANT)**2 
+        var_si_arr = n_eff * (self.si_concentrations * (1 - self.si_concentrations))
+
+        # Generate a disordered profile by adding Gaussian noise to the Si concentrations
+        disordered_si = self.si_concentrations + np.random.normal(0, np.sqrt(var_si_arr), size=self.si_concentrations.shape) / n_eff
+        disordered_si = np.clip(disordered_si, 0, 1) # Ensure concentrations are between 0 and 1
+        return disordered_si
         
         
 
