@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "alloy-disorder-sims"
+version = "0.1.0"
+description = "Code for simulating quantum dots with alloy disorder in Si/SiGe heterostructures"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+  { name = "Merritt Losert", email = "merritt.losert@gmail.com" }
+]
+
+dependencies = [
+    "numpy>=2.2",
+    "scipy>=1.16",
+    "matplotlib"
+]
+
+# Tell setuptools where your package code lives
+[tool.setuptools.packages.find]
+where = ["src"]

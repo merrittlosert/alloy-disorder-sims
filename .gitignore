@@ -1,0 +1,77 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Build and distribution folders
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+venv/
+.env/
+.venv/
+env/
+ENV/
+
+# Pipenv / Poetry
+Pipfile.lock
+poetry.lock
+
+# PyInstaller
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache/
+pytest_cache/
+coverage.xml
+nosetests.xml
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# IDE/editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Django/Flask specific
+*.log
+local_settings.py
+instance/
+db.sqlite3
+
+# MyPy / Pyre / Type Checker
+.mypy_cache/
+.pyre/
+
+# Static analysis
+.pytype/
+
+# Profiling
+.prof
+.prof.txt
+
+# Temporary files
+*.tmp
+*.temp
+
+# macOS
+.DS_Store
+
+# System files
+Thumbs.db
+
+# Holding on to old code, just in case
+_old_code/
