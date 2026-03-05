@@ -9,6 +9,7 @@ import scipy.sparse.linalg as las
 from math import *
 from scipy import sparse
 import cmath
+from scipy.stats import rice, rayleigh
 
 import vertical_profile as vp
 import constants
@@ -21,31 +22,34 @@ class BaseSolver:
     Base class for the Schrodinger equation solvers.
     """
 
-    profile: vp.VerticalProfile
     effective_lattice: np.ndarray # Either a 1D, 2D, or 3D array of si concentrations 
+
+    bulk_si_concentration: float = 0.7
+    well_si_concentration: float = 1.0
 
     vertical_field: float = 0 # in V/nm
 
-    n_eigenstates_calculated: int | None = None
-
     def __post_init__(self):
 
-        self.n_layers = self.profile.n_layers
-        self.bulk_si_concentration = self.profile.bot_cap_si_concentration
-        self.well_si_concentration = self.profile.well_si_concentration
         self.dz_nm = 1e9 * constants.SI_LATTICE_CONSTANT / 4 # spacing 
+        self.dz = 1e-9 * self.dz_nm
 
         
         # Define the conduction band offset for the given profile
-        y = 1-self.profile.bot_cap_si_concentration
-        y_well = 1-self.profile.well_si_concentration
-        self.delta_E_Si = -0.502*(1-self.profile.bot_cap_si_concentration)
-        self.delta_E_Ge = 0.743 - 0.625*(1-self.profile.bot_cap_si_concentration)
+        y = 1-self.bulk_si_concentration
+        y_well = 1-self.well_si_concentration
+        self.delta_E_Si = -0.502*(1-self.bulk_si_concentration)
+        self.delta_E_Ge = 0.743 - 0.625*(1-self.bulk_si_concentration)
 
+        # conduction band offset in eV
         self.cb_offset = (y-y_well)*( ((1-y_well)/y)*self.delta_E_Si - (y_well/(1-y))*self.delta_E_Ge)
 
         # set the Hamiltonian to None so that it will be lazily computed the first time it is accessed
         self._H = None
+
+        self._valley_splitting = None
+        self.n_eigenstates_calculated: int | None = None
+
 
     def vertical_field_potential(self, layer_from_bottom):
         """
@@ -85,12 +89,6 @@ class BaseSolver:
         self.n_eigenstates_calculated = n_lowest_eigenstates
 
         return self._lowest_evals, self._lowest_evecs
-    
-    def valley_splitting(self):
-        if self.n_eigenstates_calculated is None or self.n_eigenstates_calculated < 2:
-            self.solve(n_lowest_eigenstates=2)
-        
-        return self._lowest_evals[1] - self._lowest_evals[0]
 
 
 
@@ -113,6 +111,17 @@ class BaseSolver:
         return self._avg_onsites_by_layer
     
 
+    @property
+    def valley_splitting(self):
+        """
+        Lazily computes the valley splitting. Implementation depends on the method.
+        """
+        if self._valley_splitting is None:
+            self._compute_valley_splitting()
+        return self._valley_splitting 
+    
+    
+
 
 
 
@@ -127,18 +136,24 @@ class TwoBand(BaseSolver):
     sparse: bool = True
 
     def __post_init__(self):
-        
+        super().__post_init__()
+
         # Couplings that reproduce the position and curvature of the conduction band minima
         self.nnn_coupling_z =  2 * constants.HBAR**2 / (constants.SI_LATERAL_MASS * constants.SI_LATTICE_CONSTANT**2 * (np.sin(constants.K_0 * constants.SI_LATTICE_CONSTANT / 4))**2) / constants.ELEMENTARY_CHARGE
         self.nn_coupling_z =  4 * self.nnn_coupling_z * np.cos(constants.K_0 * constants.SI_LATTICE_CONSTANT / 4)
 
-        super().__post_init__()
+
+
+    def _compute_valley_splitting(self):
+        if self.n_eigenstates_calculated is None or self.n_eigenstates_calculated < 2:
+            self.solve(n_lowest_eigenstates=2)
+
+        self._valley_splitting = self._lowest_evals[1] - self._lowest_evals[0]
+        return self._valley_splitting
 
   
 
 
-
-    
 
 
 
@@ -146,10 +161,13 @@ class TwoBand(BaseSolver):
 class TwoBand_1D(TwoBand):
 
     def __post_init__(self):
+        super().__post_init__()
+
         if len(np.shape(self.effective_lattice)) != 1:
             raise ValueError("The effective lattice should be a 1D array for the 1D model")
         
-        super().__post_init__()
+        self.nz = len(self.effective_lattice)
+        
 
     def _onsite_term(self, i):
         """
@@ -159,9 +177,9 @@ class TwoBand_1D(TwoBand):
 
     def _compute_H(self):
         
-        ham = np.zeros((self.n_layers,self.n_layers), dtype=np.cdouble)
+        ham = np.zeros((self.nz,self.nz), dtype=np.cdouble)
 
-        for i in range(self.n_layers):
+        for i in range(self.nz):
             ham[i,i] = self._onsite_term(i)
 
             if i-1 >= 0:
@@ -170,10 +188,10 @@ class TwoBand_1D(TwoBand):
             if i-2 >= 0:
                 ham[i,i-2] = self.nnn_coupling_z
 
-            if i+1 < self.n_layers:
+            if i+1 < self.nz:
                 ham[i,i+1] = self.nn_coupling_z
 
-            if i+2 < self.n_layers:
+            if i+2 < self.nz:
                 ham[i,i+2] = self.nnn_coupling_z
         
         if self.sparse:
@@ -203,6 +221,8 @@ class TwoBand_2D(TwoBand):
     center_x_nm: float | None = None # center of the confinement in nm
 
     def __post_init__(self):
+        super().__post_init__()
+
         if len(np.shape(self.effective_lattice)) != 2:
             raise ValueError("The effective lattice should be a 2D array for the 2D model")
 
@@ -225,8 +245,6 @@ class TwoBand_2D(TwoBand):
         self.omega_x = constants.ELEMENTARY_CHARGE * self.lateral_confinement_energy / constants.HBAR
 
         self.nn_coupling_x = -constants.HBAR**2 / (2 * constants.SI_TRANSVERSE_MASS * self.dx**2) / constants.ELEMENTARY_CHARGE
-
-        super().__post_init__()
 
     # assign a unique index to a lattice point
     def _index(self, i, k):
@@ -385,6 +403,8 @@ class TwoBand_3D(TwoBand):
 
 
     def __post_init__(self):
+        super().__post_init__()
+
         if len(np.shape(self.effective_lattice)) != 3:
             raise ValueError("The effective lattice should be a 3D array for the 3D model")
 
@@ -419,8 +439,6 @@ class TwoBand_3D(TwoBand):
 
         self.nn_coupling_x = -constants.HBAR**2 / (2 * constants.SI_TRANSVERSE_MASS * self.dx**2) / constants.ELEMENTARY_CHARGE
         self.nn_coupling_y = -constants.HBAR**2 / (2 * constants.SI_TRANSVERSE_MASS * self.dy**2) / constants.ELEMENTARY_CHARGE
-
-        super().__post_init__()
 
 
     def _nearest_neighbor_coords(self,i,j,k):
@@ -678,10 +696,144 @@ class TwoBand_3D(TwoBand):
 
 
 
+@dataclass 
+class EffectiveMass(BaseSolver):
+    """
+    Base class for the EM solvers.
+    This model ignores valley physics, and just uses the effective masses of Si. 
+    Valley splitting is computed perturbatively using the EMA.
+    """
+
+    sparse: bool = True
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        # For effective mass, we ignore valleys and use the standard nn coupling that reproduces the curvature of the conduction band minima
+        self.nn_coupling_z = -constants.HBAR**2 / (2 * constants.SI_LATERAL_MASS * self.dz**2) / constants.ELEMENTARY_CHARGE
+
+        self._inter_valley_coupling = None
+        self._sigma_delta = None
+
+
+    def _compute_valley_splitting(self):
+        if self._inter_valley_coupling is None:
+            self._compute_inter_valley_coupling()
+        
+        self._valley_splitting = 2 * abs(self._inter_valley_coupling)
+        return self._valley_splitting
+
+
+    @property
+    def inter_valley_coupling(self):
+        if self._inter_valley_coupling is None:
+            self._compute_inter_valley_coupling()
+        return self._inter_valley_coupling
+    
+    def sigma_delta(self, dot_size_nm):
+        return self._compute_sigma_delta(dot_size_nm)
+  
+
+    def valley_splitting_pdf(self, Ev_arr, dot_size_nm):
+        """
+        Returns the Rayleigh/Rice pdfs of valley splittings for a given array of values Ev_arr (eV) and dot size (nm).
+        """
+        sd = self.sigma_delta(dot_size_nm)
+        Ev0 = 2 * abs(self.inter_valley_coupling)
+        s = sd * np.sqrt(2)
+
+        eps = 1e-7
+        if Ev0 < eps:
+            # if the inter-valley coupling is zero, then the valley splitting is just Rayleigh distributed
+            pdf_arr = rayleigh.pdf(Ev_arr, scale=s)
+            return pdf_arr
+
+        else:
+            pdf_arr = rice.pdf(Ev_arr, b=Ev0/s, scale=s)
+
+        return pdf_arr
+    
+
+        
 
 
 
 
+@dataclass
+class EffectiveMass_1D(EffectiveMass):
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if len(np.shape(self.effective_lattice)) != 1:
+            raise ValueError("The effective lattice should be a 1D array for the 1D model")
+        
+        self.nz = len(self.effective_lattice)
+
+    def _onsite_term(self, i):
+        """
+        A function that takes as input the index i and returns the onsite potential from vertical field and Ge concentration terms
+        """
+        return self.vertical_field_potential(i) + self.fractional_cb_offset(self.effective_lattice[i])
+
+    def _compute_H(self):
+        
+        ham = np.zeros((self.nz,self.nz), dtype=np.cdouble)
+
+        for i in range(self.nz):
+            ham[i,i] = self._onsite_term(i)
+
+            if i-1 >= 0:
+                ham[i,i-1] = self.nn_coupling_z
+
+            if i+1 < self.nz:
+                ham[i,i+1] = self.nn_coupling_z
+        
+        if self.sparse:
+            self._H = sparse.dia_matrix(ham).tocsc()
+
+        else:
+            self._H = ham
+
+
+    def _compute_1D_potential_equivalent(self):
+        ham = self.hamiltonian
+        (nx, _) = np.shape(ham)
+        onsites = np.zeros(nx, dtype=np.cdouble)
+
+        for i in range(nx):
+            onsites[i] = ham[i,i]
+
+        self._avg_onsites_by_layer = onsites
+
+
+    def _compute_inter_valley_coupling(self):
+        _, v0 = self.solve(n_lowest_eigenstates=1)
+        psi_0 = v0[:,0]
+
+        z_arr = 1e-9 * np.arange(self.nz) * self.dz_nm
+        pot_arr = self.fractional_cb_offset(self.effective_lattice)
+        coupling = np.sum(psi_0**2 * np.exp(-1j * 2 * constants.K_0 * z_arr) * pot_arr)
+
+        self._inter_valley_coupling = coupling
+        return coupling
+    
+    
+    def _compute_sigma_delta(self, dot_size_nm):
+        """
+        Computing the standard deviation of the inter-valley coupling.
+        """
+        _, v0 = self.solve(n_lowest_eigenstates=1)
+        psi_0 = np.abs(v0[:,0])
+        psi_0 = psi_0 / np.sqrt(np.sum(self.dz * psi_0**2)) # normalize the wavefunction so that we can interpret psi_0**2 as a probability density
+
+        concs = self.effective_lattice
+
+        delta_conc = self.well_si_concentration - self.bulk_si_concentration
+        c = (1/np.pi) * ((constants.SI_LATTICE_CONSTANT**2 * self.cb_offset) / (8 * 1e-9 * dot_size_nm * delta_conc))**2 
+        sd = np.sqrt( c * np.sum( psi_0**4 * concs * (1-concs) ) )
+
+        return sd
 
 
 
