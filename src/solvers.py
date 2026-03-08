@@ -8,13 +8,10 @@ import scipy.linalg as la
 import scipy.sparse.linalg as las
 from math import *
 from scipy import sparse
-import cmath
 from scipy.stats import rice, rayleigh
 
-import vertical_profile as vp
 import constants
-
-
+import helpers.solver_helpers as helpers
 
 @dataclass
 class BaseSolver:
@@ -71,19 +68,17 @@ class BaseSolver:
 
         if self.sparse:
             # H_x will be a sparse matrix
-            # Negate H to let us solve for max eigenvalues
-            ham_sp = -self.hamiltonian
-            w, v = las.eigsh(ham_sp, k=n_lowest_eigenstates, which='LR')
-            w = -w
+            ham_sp = self.hamiltonian
+            w, v = las.eigsh(ham_sp, k=n_lowest_eigenstates, which='SA')
         else:
             ham = self.hamiltonian
             w, v = la.eigh(ham)
 
         e_vals = np.sort(w)
         sort_index = np.argsort(w) 
-
+        
         self._lowest_evals = e_vals[:n_lowest_eigenstates]
-        self._lowest_evecs = v[:,sort_index[:n_lowest_eigenstates]]
+        self._lowest_evecs = self._normalize(v[:,sort_index[:n_lowest_eigenstates]])
         self._solved_num = n_lowest_eigenstates
 
         self.n_eigenstates_calculated = n_lowest_eigenstates
@@ -119,6 +114,8 @@ class BaseSolver:
         if self._valley_splitting is None:
             self._compute_valley_splitting()
         return self._valley_splitting 
+    
+
     
     
 
@@ -167,6 +164,10 @@ class TwoBand_1D(TwoBand):
             raise ValueError("The effective lattice should be a 1D array for the 1D model")
         
         self.nz = len(self.effective_lattice)
+
+        self._z00_nm = None 
+        self._z11_nm = None 
+        self._z01_nm = None
         
 
     def _onsite_term(self, i):
@@ -176,40 +177,76 @@ class TwoBand_1D(TwoBand):
         return self.vertical_field_potential(i) + self.fractional_cb_offset(self.effective_lattice[i])
 
     def _compute_H(self):
+
+        ham = helpers.compute_1D_H(
+            nz = self.nz, 
+            onsite_func = self._onsite_term, 
+            nn_coupling_z = self.nn_coupling_z, 
+            nnn_coupling_z = self.nnn_coupling_z,
+            use_sparse=self.sparse
+        )
+        self._H = ham
+
         
-        ham = np.zeros((self.nz,self.nz), dtype=np.cdouble)
-
-        for i in range(self.nz):
-            ham[i,i] = self._onsite_term(i)
-
-            if i-1 >= 0:
-                ham[i,i-1] = self.nn_coupling_z
-
-            if i-2 >= 0:
-                ham[i,i-2] = self.nnn_coupling_z
-
-            if i+1 < self.nz:
-                ham[i,i+1] = self.nn_coupling_z
-
-            if i+2 < self.nz:
-                ham[i,i+2] = self.nnn_coupling_z
-        
-        if self.sparse:
-            self._H = sparse.dia_matrix(ham).tocsc()
-
-        else:
-            self._H = ham
-
 
     def _compute_1D_potential_equivalent(self):
         ham = self.hamiltonian
         (nx, _) = np.shape(ham)
-        onsites = np.zeros(nx, dtype=np.cdouble)
+        onsites = np.zeros(nx, dtype=np.double)
 
         for i in range(nx):
             onsites[i] = ham[i,i]
 
         self._avg_onsites_by_layer = onsites
+
+
+    def _normalize(self, evecs):
+        return evecs / np.linalg.norm(evecs, axis=0) / np.sqrt(self.dz)
+    
+    @property
+    def z00_nm(self):
+        """
+        Lazily computes the dipolar matrix element z00
+        """
+        if self._z00_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._z00_nm
+    
+    @property
+    def z11_nm(self):
+        """
+        Lazily computes the dipolar matrix element z11
+        """
+        if self._z11_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._z11_nm
+    
+    @property
+    def z01_nm(self):
+        """
+        Lazily computes the dipolar matrix element z01
+        """
+        if self._z01_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._z01_nm
+    
+
+    def _compute_dipolar_matrix_elements(self):
+        """
+        Lazily computes the dipolar matrix elements between ground and excited valleys.
+        """
+        if self.n_eigenstates_calculated is None or self.n_eigenstates_calculated < 2:
+            self.solve(n_lowest_eigenstates=2)
+
+        zs = np.arange(self.nz) * self.dz
+
+        v0 = self._lowest_evecs[:,0]
+        v1 = self._lowest_evecs[:,1]
+
+        # Compute z matrix elements, converting to nm
+        self._z00_nm = 1e9 * np.sum(self.dz * v0 * v0 * zs)
+        self._z01_nm = 1e9 * np.sum(self.dz * v0 * v1 * zs)
+        self._z11_nm = 1e9 * np.sum(self.dz * v1 * v1 * zs)
 
 
 
@@ -219,6 +256,8 @@ class TwoBand_2D(TwoBand):
     dx_nm: float | None = None
     lateral_confinement_energy: float = 2e-3 # eV
     center_x_nm: float | None = None # center of the confinement in nm
+
+    periodic: bool = False # if we should use periodic BCs
 
     def __post_init__(self):
         super().__post_init__()
@@ -246,69 +285,14 @@ class TwoBand_2D(TwoBand):
 
         self.nn_coupling_x = -constants.HBAR**2 / (2 * constants.SI_TRANSVERSE_MASS * self.dx**2) / constants.ELEMENTARY_CHARGE
 
-    # assign a unique index to a lattice point
-    def _index(self, i, k):
-        return i*self.nz + k
+        # These will be computed if called for
+        self._x00_nm = None
+        self._x01_nm = None 
+        self._x11_nm = None
 
-    def _coordinates(self, index):
-        i = int(np.floor(index/(self.nz)))
-        k = int(np.remainder(index,self.nz))
-
-        return (i,k)
-
-    def _add_element_to_diag(self, offset, ind_curr, element, diag_dict):
-
-        ind_1 = ind_curr
-        ind_2 = offset+ind_1
-        ind_d = max(ind_1,ind_2)
-        if offset in diag_dict.keys():
-            diag_dict[offset][ind_d-abs(offset)] = element
-        else:
-            diag_list = np.zeros(self.nx*self.nz - abs(offset))
-            diag_list[ind_d-abs(offset)] = element
-            diag_dict[offset] = diag_list
-
-
-    def _add_element(self, ind_1, ind_2, element, diag_dict, hamiltonian):
-        if self.sparse:
-            offset = ind_2 - ind_1
-            self._add_element_to_diag(offset, ind_1, element, diag_dict)
-        else:
-            hamiltonian[ind_1,ind_2] = element
-
-
-    def _add_neighbor_couplings(self, i, k, diag_dict, hamiltonian):
-        ind_curr = self._index(i,k)
-
-        # z couplings
-        if k-1 >= 0:
-            ind_z = self._index(i,k-1)
-            self._add_element(ind_curr,ind_z,self.nn_coupling_z, diag_dict, hamiltonian)
-        if k-2 >= 0:
-            ind_z = self._index(i,k-2)
-            self._add_element(ind_curr,ind_z,self.nnn_coupling_z, diag_dict, hamiltonian)
-        if k+1 < self.nz:
-            ind_z = self._index(i,k+1)
-            self._add_element(ind_curr,ind_z,self.nn_coupling_z, diag_dict, hamiltonian)
-        if k+2 < self.nz:
-            ind_z = self._index(i,k+2)
-            self._add_element(ind_curr,ind_z,self.nnn_coupling_z, diag_dict, hamiltonian)
-
-        # x couplings
-        if i-1 >= 0:
-            ind_x = self._index(i-1,k)
-            self._add_element(ind_curr,ind_x,self.nn_coupling_x, diag_dict, hamiltonian)
-        elif self.periodic:
-            ind_x = self._index(self.nx-1,k)
-            self._add_element(ind_curr,ind_x,self.nn_coupling_x, diag_dict, hamiltonian)
-
-        if i+1 < self.nx:
-            ind_x = self._index(i+1,k)
-            self._add_element(ind_curr,ind_x,self.nn_coupling_x, diag_dict, hamiltonian)
-        elif self.periodic:
-            ind_x = self._index(0,k)
-            self._add_element(ind_curr,ind_x,self.nn_coupling_x, diag_dict, hamiltonian)
-           
+        self._z00_nm = None
+        self._z01_nm = None 
+        self._z11_nm = None
 
 
     def _confinement(self, i):
@@ -325,46 +309,26 @@ class TwoBand_2D(TwoBand):
         return on
 
 
-
     def _compute_H(self):
-        diag_dict = dict()
-        main_diag = np.zeros(self.nx*self.nz)
-        
-        if not self.sparse:
-            hamiltonian = np.zeros((self.nx*self.nz, self.nx*self.nz), dtype=np.cdouble)
-        else:
-            hamiltonian = None
 
-        for i in range(self.nx):
-            for k in range(self.nz):
-                ind_curr = self._index(i,k)
+        ham = helpers.compute_2D_H(
+            nx = self.nx, 
+            nz = self.nz, 
+            onsite_func = self._onsite_term,
+            nn_coupling_z = self.nn_coupling_z, 
+            nnn_coupling_z = self.nnn_coupling_z,
+            nn_coupling_x = self.nn_coupling_x,
+            use_sparse = self.sparse,
+            periodic = self.periodic,
+        )
 
-                # onsite terms
-                on = self._onsite_term(i,k)
-
-                if self.sparse:
-                    self._add_element_to_diag(0,ind_curr,on, diag_dict)
-                    main_diag[ind_curr] = on
-                    hamiltonian = None
-                else:
-                    hamiltonian[ind_curr,ind_curr] = on
-
-                self._add_neighbor_couplings(i,k,diag_dict,hamiltonian)
+        self._H = ham
 
 
-        if self.sparse:
-            offsets = list()
-            diags = list()
-            for offset in diag_dict.keys():
-                offsets.append(offset)
-                diags.append(diag_dict[offset])
-            self._H = sparse.diags(diags, offsets=offsets, shape=(self.nx*self.nz,self.nx*self.nz))
-        else:
-            self._H = hamiltonian
-
-
-    # return array of onsites at given layer
     def _compute_1D_potential_equivalent(self, l):
+        """
+        Return array of onsites at given layer
+        """
         onsites = np.zeros(self.nx)
         for i in range(self.nx):
             on = self._onsite_term(i,l)
@@ -374,12 +338,100 @@ class TwoBand_2D(TwoBand):
 
     def wf_2D_matrix_from_vector(self, v):
 
-        mat = np.zeros((self.nx, self.nz), dtype=np.cdouble)
+        mat = np.zeros((self.nx, self.nz), dtype=np.double)
         for ind in range(len(v)):
-            (i,k) = self._coordinates(ind)
+            (i,k) = helpers.coordinates_2D(ind, nz=self.nz)
             mat[i,k] = v[ind]
 
         return mat
+    
+
+    def _normalize(self, evecs):
+        return evecs / np.linalg.norm(evecs, axis=0) / np.sqrt(self.dz * self.dx)
+    
+
+
+    @property
+    def x00_nm(self):
+        """
+        Lazily computes the dipolar matrix element x00
+        """
+        if self._x00_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._x00_nm
+    
+    @property
+    def x11_nm(self):
+        """
+        Lazily computes the dipolar matrix element x11
+        """
+        if self._x11_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._x11_nm
+    
+    @property
+    def x01_nm(self):
+        """
+        Lazily computes the dipolar matrix element x01
+        """
+        if self._x01_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._x01_nm
+    
+    @property
+    def z00_nm(self):
+        """
+        Lazily computes the dipolar matrix element z00
+        """
+        if self._z00_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._z00_nm
+    
+    @property
+    def z11_nm(self):
+        """
+        Lazily computes the dipolar matrix element z11
+        """
+        if self._z11_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._z11_nm
+    
+    @property
+    def z01_nm(self):
+        """
+        Lazily computes the dipolar matrix element z01
+        """
+        if self._z01_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._z01_nm
+
+    def _compute_dipolar_matrix_elements(self):
+        """
+        Lazily computes the dipolar matrix elements between ground and excited valleys.
+
+        For x matrix elements, we set the origin at center_x.
+        """
+        if self.n_eigenstates_calculated is None or self.n_eigenstates_calculated < 2:
+            self.solve(n_lowest_eigenstates=2)
+
+        x_range = np.arange(self.nx) * self.dx
+        z_range = np.arange(self.nz) * self.dz
+        zs, xs = np.meshgrid(z_range, x_range)
+
+        xs = xs - self.center_x
+
+        v0 = self.wf_2D_matrix_from_vector(self._lowest_evecs[:,0])
+        v1 = self.wf_2D_matrix_from_vector(self._lowest_evecs[:,1])
+
+        # Compute x and z matrix elements, converting to nm
+        self._x00_nm = 1e9 * np.sum(self.dx * self.dz * v0 * v0 * xs)
+        self._x01_nm = 1e9 * np.sum(self.dx * self.dz * v0 * v1 * xs)
+        self._x11_nm = 1e9 * np.sum(self.dx * self.dz * v1 * v1 * xs)
+
+        self._z00_nm = 1e9 * np.sum(self.dx * self.dz * v0 * v0 * zs)
+        self._z01_nm = 1e9 * np.sum(self.dx * self.dz * v0 * v1 * zs)
+        self._z11_nm = 1e9 * np.sum(self.dx * self.dz * v1 * v1 * zs)
+
 
 
 
@@ -401,6 +453,7 @@ class TwoBand_3D(TwoBand):
     lateral_confinement_energy_x: float = 2e-3 # eV
     lateral_confinement_energy_y: float = 2e-3 # eV
 
+    periodic: bool = False # if we should use periodic BCs
 
     def __post_init__(self):
         super().__post_init__()
@@ -576,7 +629,7 @@ class TwoBand_3D(TwoBand):
         main_diag = np.zeros(self.nx*self.ny*self.nz)
         
         if not self.sparse:
-            hamiltonian = np.zeros((self.nx*self.ny*self.nz, self.nx*self.ny*self.nz), dtype=np.cdouble)
+            hamiltonian = np.zeros((self.nx*self.ny*self.nz, self.nx*self.ny*self.nz), dtype=np.double)
         else:
             hamiltonian = None
 
@@ -618,10 +671,10 @@ class TwoBand_3D(TwoBand):
         diag_dict = dict()
         main_diag = np.zeros(self.nx*self.ny*self.nz)
 
-        onsites_by_layer = np.zeros(self.nz, dtype=np.cdouble)
+        onsites_by_layer = np.zeros(self.nz, dtype=np.double)
         
         if not self.sparse:
-            hamiltonian = np.zeros((self.nx*self.ny*self.nz, self.nx*self.ny*self.nz), dtype=np.cdouble)
+            hamiltonian = np.zeros((self.nx*self.ny*self.nz, self.nx*self.ny*self.nz), dtype=np.double)
         else:
             hamiltonian = None
 
@@ -671,7 +724,7 @@ class TwoBand_3D(TwoBand):
 
     def wf_3D_matrix_from_vector(self, v):
 
-        mat = np.zeros((self.nx, self.ny, self.nz), dtype=np.cdouble)
+        mat = np.zeros((self.nx, self.ny, self.nz), dtype=np.double)
         for ind in range(len(v)):
             (i,j,k) = self._coordinates(ind)
             mat[i,j,k] = v[ind]
@@ -682,12 +735,16 @@ class TwoBand_3D(TwoBand):
 
     def wf_3D_matrix_from_vector(self, v):
 
-        mat = np.zeros((self.nx, self.ny, self.nz), dtype=np.cdouble)
+        mat = np.zeros((self.nx, self.ny, self.nz), dtype=np.double)
         for ind in range(len(v)):
             (i,j,k) = self._coordinates(ind)
             mat[i,j,k] = v[ind]
 
         return mat
+    
+
+    def _normalize(self, evecs):
+        return evecs / np.linalg.norm(evecs, axis=0) / np.sqrt(self.dz * self.dx * self.dy)
 
         
 
@@ -777,29 +834,20 @@ class EffectiveMass_1D(EffectiveMass):
         return self.vertical_field_potential(i) + self.fractional_cb_offset(self.effective_lattice[i])
 
     def _compute_H(self):
-        
-        ham = np.zeros((self.nz,self.nz), dtype=np.cdouble)
+        ham = helpers.compute_1D_H(
+            nz = self.nz, 
+            onsite_func = self._onsite_term, 
+            nn_coupling_z = self.nn_coupling_z, 
+            nnn_coupling_z = 0,
+            use_sparse=self.sparse
+        )
 
-        for i in range(self.nz):
-            ham[i,i] = self._onsite_term(i)
-
-            if i-1 >= 0:
-                ham[i,i-1] = self.nn_coupling_z
-
-            if i+1 < self.nz:
-                ham[i,i+1] = self.nn_coupling_z
-        
-        if self.sparse:
-            self._H = sparse.dia_matrix(ham).tocsc()
-
-        else:
-            self._H = ham
-
-
+        self._H = ham
+ 
     def _compute_1D_potential_equivalent(self):
         ham = self.hamiltonian
         (nx, _) = np.shape(ham)
-        onsites = np.zeros(nx, dtype=np.cdouble)
+        onsites = np.zeros(nx, dtype=np.double)
 
         for i in range(nx):
             onsites[i] = ham[i,i]
@@ -813,7 +861,7 @@ class EffectiveMass_1D(EffectiveMass):
 
         z_arr = 1e-9 * np.arange(self.nz) * self.dz_nm
         pot_arr = self.fractional_cb_offset(self.effective_lattice)
-        coupling = np.sum(psi_0**2 * np.exp(-1j * 2 * constants.K_0 * z_arr) * pot_arr)
+        coupling = np.sum(self.dz * np.abs(psi_0**2) * np.exp(-1j * 2 * constants.K_0 * z_arr) * pot_arr)
 
         self._inter_valley_coupling = coupling
         return coupling
@@ -825,7 +873,6 @@ class EffectiveMass_1D(EffectiveMass):
         """
         _, v0 = self.solve(n_lowest_eigenstates=1)
         psi_0 = np.abs(v0[:,0])
-        psi_0 = psi_0 / np.sqrt(np.sum(self.dz * psi_0**2)) # normalize the wavefunction so that we can interpret psi_0**2 as a probability density
 
         concs = self.effective_lattice
 
@@ -836,9 +883,120 @@ class EffectiveMass_1D(EffectiveMass):
         return sd
 
 
+    def _normalize(self, evecs):
+        """
+        When normalizing the envelope functions, ensure the maximum amplitude is positive
+        """
+        return evecs / np.linalg.norm(evecs, axis=0) / np.sqrt(self.dz) * np.sign(np.max(evecs, axis=0))
+
+       
 
 
 
+@dataclass
+class EffectiveMass_2D(EffectiveMass):
+
+    dx_nm: float | None = None
+    lateral_confinement_energy: float = 2e-3 # eV
+    center_x_nm: float | None = None # center of the confinement in nm
+
+    periodic: bool = False # if we should use periodic BCs
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if len(np.shape(self.effective_lattice)) != 2:
+            raise ValueError("The effective lattice should be a 2D array for the 2D model")
+
+        if self.dx_nm is None:
+            raise ValueError("Please specify a lattice spacing dx_nm for the 2D model")
+        
+        self.dx = 1e-9*self.dx_nm
+        
+        (nx, nz) = np.shape(self.effective_lattice)
+        self.nx = nx
+        self.nz = nz
+
+        if self.center_x_nm is None:
+            self.center_x_nm = self.dx_nm * nx/2
+            self.center_x = 1e-9*self.center_x_nm
+        else:
+            self.center_x = (1e-9)*self.center_x_nm
 
 
+        self.omega_x = constants.ELEMENTARY_CHARGE * self.lateral_confinement_energy / constants.HBAR
+
+        self.nn_coupling_x = -constants.HBAR**2 / (2 * constants.SI_TRANSVERSE_MASS * self.dx**2) / constants.ELEMENTARY_CHARGE
+
+
+    
+    def _confinement(self, i):
+        x = i*self.dx
+        c = (1/2) * constants.SI_TRANSVERSE_MASS*(self.omega_x**2 * (x-self.center_x)**2 ) / constants.ELEMENTARY_CHARGE # divide by e to convert to eV
+        return c
+    
+    def _qw_offset(self,i,k):
+        s = self.effective_lattice[i,k]
+        return self.fractional_cb_offset(s)
+
+    def _onsite_term(self,i,k):
+        on = self.vertical_field_potential(k) + self._confinement(i) + self._qw_offset(i,k)
+        return on
+
+
+    def _compute_H(self):
+
+        ham = helpers.compute_2D_H(
+            nx = self.nx, 
+            nz = self.nz, 
+            onsite_func = self._onsite_term,
+            nn_coupling_z = self.nn_coupling_z, 
+            nnn_coupling_z = 0,
+            nn_coupling_x = self.nn_coupling_x,
+            use_sparse = self.sparse,
+            periodic = self.periodic,
+        )
+
+        self._H = ham
+
+    def wf_2D_matrix_from_vector(self, v):
+
+        mat = np.zeros((self.nx, self.nz), dtype=np.double)
+        for ind in range(len(v)):
+            (i,k) = helpers.coordinates_2D(ind, nz=self.nz)
+            mat[i,k] = v[ind]
+
+        return mat
+    
+
+    def _compute_inter_valley_coupling(self):
+        _, v0 = self.solve(n_lowest_eigenstates=1)
+        psi_0 = self.wf_2D_matrix_from_vector(v0[:,0])
+
+        z_arr = 1e-9 * np.arange(self.nz) * self.dz_nm
+        x_arr = 1e-9 * np.arange(self.nx) * self.dx_nm 
+
+        pot_arr = self.fractional_cb_offset(self.effective_lattice)
+        coupling = np.sum(self.dz * self.dx * np.abs(psi_0**2) * np.exp(-1j * 2 * constants.K_0 * z_arr) * pot_arr)
+
+        self._inter_valley_coupling = coupling
+        return coupling
+    
+    
+    def _compute_sigma_delta(self, dot_size_nm):
+        """
+        Computing the standard deviation of the inter-valley coupling.
+        """
+       
+        raise NotImplementedError("Not yet implemented")
+    
+
+    def _normalize(self, evecs):
+        """
+        When normalizing the envelope functions, ensure the maximum amplitude is positive
+        """
+        return evecs / np.linalg.norm(evecs, axis=0) / np.sqrt(self.dz * self.dx) * np.sign(np.max(evecs, axis=0))
+    
+
+       
 

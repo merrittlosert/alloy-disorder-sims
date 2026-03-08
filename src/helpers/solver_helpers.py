@@ -1,0 +1,223 @@
+import numpy as np
+from scipy import sparse
+
+
+"""
+Helpers for the 1D potential solvers
+"""
+
+def compute_1D_H(
+        nz: int, 
+        onsite_func: callable, 
+        nn_coupling_z: float, 
+        nnn_coupling_z: float, 
+        use_sparse: bool
+):
+    """
+    Constructs a 1D potential Hamiltonian
+    """
+    
+    ham = np.zeros((nz, nz), dtype=np.double)
+
+    for i in range(nz):
+            ham[i,i] = onsite_func(i)
+
+            if i-1 >= 0:
+                ham[i,i-1] = nn_coupling_z
+
+            if i-2 >= 0:
+                ham[i,i-2] = nnn_coupling_z
+
+            if i+1 < nz:
+                ham[i,i+1] = nn_coupling_z
+
+            if i+2 < nz:
+                ham[i,i+2] = nnn_coupling_z
+        
+    
+    if use_sparse:
+        H = sparse.dia_matrix(ham).tocsc()
+
+    else:
+        H = ham
+
+    return H
+
+
+
+
+
+"""
+Helpers for the 2D potential solvers
+"""
+
+
+def _add_element_to_diag(
+        offset: int, 
+        ind_curr: int, 
+        element: float, 
+        diag_dict: dict,
+        tot_num_elements: int
+):
+
+    ind_1 = ind_curr
+    ind_2 = offset+ind_1
+    ind_d = max(ind_1,ind_2)
+    if offset in diag_dict.keys():
+        diag_dict[offset][ind_d-abs(offset)] = element
+    else:
+        diag_list = np.zeros(tot_num_elements - abs(offset))
+        diag_list[ind_d-abs(offset)] = element
+        diag_dict[offset] = diag_list
+
+
+def _add_element(
+        ind_1: int, 
+        ind_2: int, 
+        element: float, 
+        diag_dict: dict, 
+        hamiltonian: np.ndarray | None, 
+        use_sparse: bool, 
+        tot_num_elements: int
+):
+    if use_sparse:
+        offset = ind_2 - ind_1
+        _add_element_to_diag(offset, ind_1, element, diag_dict, tot_num_elements=tot_num_elements)
+    else:
+        hamiltonian[ind_1,ind_2] = element
+
+
+
+
+
+
+def coordinates_2D(index: int, nz: int) -> tuple[int, int]:
+    i = int(np.floor(index/(nz)))
+    k = int(np.remainder(index, nz))
+
+    return (i,k)
+
+
+def _index_2D(i: int, k: int, nz: int) -> int:
+    return i*nz + k
+
+
+def _add_neighbor_couplings_2D(
+        i: int, 
+        k: int, 
+        diag_dict: dict, 
+        hamiltonian: np.ndarray | None,
+        nn_coupling_z: float,
+        nnn_coupling_z: float,
+        nn_coupling_x: float,
+        nx: int,
+        nz: int,
+        periodic: bool,
+        use_sparse: bool,
+    ):
+    ind_curr = _index_2D(i, k, nz)
+
+    # z couplings
+    if k-1 >= 0:
+        ind_z = _index_2D(i, k-1, nz)
+        _add_element(ind_curr, ind_z, nn_coupling_z, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*nz)
+    if k-2 >= 0:
+        ind_z = _index_2D(i, k-2, nz)
+        _add_element(ind_curr, ind_z, nnn_coupling_z, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*nz)
+    if k+1 < nz:
+        ind_z = _index_2D(i, k+1, nz)
+        _add_element(ind_curr, ind_z, nn_coupling_z, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*nz)
+    if k+2 < nz:
+        ind_z = _index_2D(i, k+2, nz)
+        _add_element(ind_curr, ind_z, nnn_coupling_z, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*nz)
+
+    # x couplings
+    if i-1 >= 0:
+        ind_x = _index_2D(i-1, k, nz)
+        _add_element(ind_curr, ind_x, nn_coupling_x, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*nz)
+    elif periodic:
+        ind_x = _index_2D(nx-1, k, nz)
+        _add_element(ind_curr, ind_x, nn_coupling_x, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*nz)
+
+    if i+1 < nx:
+        ind_x = _index_2D(i+1, k, nz)
+        _add_element(ind_curr, ind_x, nn_coupling_x, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*nz)
+    elif periodic:
+        ind_x = _index_2D(0, k, nz)
+        _add_element(ind_curr, ind_x, nn_coupling_x, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*nz)
+        
+
+
+
+
+
+def compute_2D_H(
+        nx: int, 
+        nz: int, 
+        onsite_func: callable,
+        nn_coupling_z: float, 
+        nnn_coupling_z: float,
+        nn_coupling_x: float,
+        use_sparse: bool,
+        periodic: bool,
+):
+    
+    """
+    Constructs a 2D potential Hamiltonian
+    """
+    
+
+    diag_dict = dict()
+    main_diag = np.zeros(nx * nz)
+    
+    if not use_sparse:
+        hamiltonian = np.zeros((nx*nz, nx*nz), dtype=np.double)
+    else:
+        hamiltonian = None
+
+    for i in range(nx):
+        for k in range(nz):
+            ind_curr = _index_2D(i, k, nz)
+
+            # onsite terms
+            on = onsite_func(i,k)
+
+            if use_sparse:
+                _add_element_to_diag(
+                    offset = 0, 
+                    ind_curr = ind_curr, 
+                    element = on, 
+                    diag_dict = diag_dict, 
+                    tot_num_elements = nx*nz
+                )
+ 
+                main_diag[ind_curr] = on
+            else:
+                hamiltonian[ind_curr,ind_curr] = on
+
+            _add_neighbor_couplings_2D(
+                i = i, 
+                k = k, 
+                diag_dict = diag_dict, 
+                hamiltonian = hamiltonian,
+                nn_coupling_z = nn_coupling_z,
+                nnn_coupling_z = nnn_coupling_z,
+                nn_coupling_x = nn_coupling_x,
+                nx = nx, 
+                nz = nz,
+                periodic = periodic,
+                use_sparse = use_sparse
+            )
+
+
+    if use_sparse:
+        offsets = list()
+        diags = list()
+        for offset in diag_dict.keys():
+            offsets.append(offset)
+            diags.append(diag_dict[offset])
+        ham = sparse.diags(diags, offsets=offsets, shape=(nx*nz, nx*nz))
+    else:
+        ham = hamiltonian
+
+    return ham
