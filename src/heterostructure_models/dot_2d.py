@@ -33,6 +33,9 @@ class Dot2D:
     # For staircase and custom step models, the list of step locations along x, in units of dx
     step_location_list: list[int] | None = None
 
+    # For custom steps, we can choose to have upward or downward steps
+    step_directions: list[int] | int | None = None
+    
     def __post_init__(self):
         self.n_layers = len(self.si_concentrations)
 
@@ -58,10 +61,25 @@ class Dot2D:
         elif self.step_model == 'staircase':
             if self.step_spacing is None:
                 raise ValueError('Must specify step_spacing for staircase model.')
-            
+                        
         elif self.step_model == 'custom':
             if self.step_location_list is None:
                 raise ValueError('Must specify step_location_list for custom step model.')
+            
+            # Handle custom step directions
+            if self.step_directions is None:
+                self._step_directions = np.ones_like(self.step_location_list)
+            
+            elif self.step_directions == 1 or self.step_directions == -1:
+                self._step_directions = self.step_directions * np.ones_like(self.step_location_list)
+            
+            elif len(self.step_directions) != len(self.step_location_list):
+                raise ValueError('step_direction must either be a number (0,1) or a list of equal length to step_location_list.')
+            
+            else:
+                self._step_directions = np.sign(self.step_directions)
+
+
             
 
         if self.step_model == 'none':
@@ -80,6 +98,8 @@ class Dot2D:
                     step_list.append(j)
 
             self.step_location_list = step_list
+            self._step_directions = np.ones_like(step_list)
+
             self._generate_2d_lattice_from_step_list()
 
         elif self.step_model == 'custom':
@@ -138,7 +158,12 @@ class Dot2D:
 
         total_num_steps = len(self.step_location_list)
 
-        nz = len(self.si_concentrations) - total_num_steps
+        total_step_offset = int(np.sum(self._step_directions))
+
+        accumulated_offset = np.array([np.sum(self._step_directions[:l]) for l in range(len(self.step_location_list))]).astype(int)
+        max_offset = accumulated_offset[np.argmax(np.abs(accumulated_offset))]
+
+        nz = len(self.si_concentrations) - (total_num_steps)
         lattice = np.zeros((self.nx, nz))
 
         for i in range(self.nx):
@@ -148,17 +173,19 @@ class Dot2D:
                 plateau_found = False
                 for l in range(len(self.step_location_list)):
                     if not plateau_found:
+                        step_offset = int(np.sum(self._step_directions[:l]))
                         step_loc = self.step_location_list[l]
 
                         # if i is less than a step location, then we know it belongs on the plateau
                         # that ends at that location
                         if i < step_loc:
                             plateau_found = True
-                            xk = self.si_concentrations[k+l]
+                            #xk = self.si_concentrations[k+l]
+                            xk = self.si_concentrations[k + step_offset - max_offset]
 
                 # if no plateau has yet been found, then the pleateau is the farthest right.
                 if not plateau_found:
-                    xk = self.si_concentrations[k+total_num_steps]
+                    xk = self.si_concentrations[k+total_step_offset - max_offset]
 
                 if self.disorder_model == 'alloy':
                     #lattice[i,k] = np.random.binomial(self._n_eff_y, xk)/self._n_eff_y
