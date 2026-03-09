@@ -110,7 +110,7 @@ class Dot3D:
                     random_lattice[i,j,k] = np.random.binomial(self.n_eff, xk) / self.n_eff
 
         return random_lattice
-
+    
 
 
 

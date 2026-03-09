@@ -14,7 +14,17 @@ def compute_1D_H(
         use_sparse: bool
 ):
     """
-    Constructs a 1D potential Hamiltonian
+    Constructs the 1D Hamiltonian.
+
+    Inputs:
+        nz (int) : Number of cells along z in the Hamiltonian matrix
+        onsite_func (callable) : A function that takes index (i) and returns the onsite potential
+        nn_coupling_z (float) : The nearest-neighbor coupling along z
+        nnn_coupling_z (float) : The next-nearest-neighbor coupling along z
+        use_sparse (bool) : Whether or not to construct a sparse matrix 
+
+    Returns:
+        Either the Hamiltonian matrix (1D np.ndarray) or a sparse list of diagonals, depending on the value of use_sparse
     """
     
     ham = np.zeros((nz, nz), dtype=np.double)
@@ -59,6 +69,16 @@ def _add_element_to_diag(
         diag_dict: dict,
         tot_num_elements: int
 ):
+    """
+    Adds an element to the diagonal with offset
+
+    Inputs:
+        offset (int) : The offset of the diagonal
+        ind_curr (int) : The current index
+        element (float) : The value of the element to add
+        diag_dict (dict) : A dict mapping offsets to list of diagonal elements
+        tot_num_elements (int) : The total number of elements in the Hamiltonian
+    """
 
     ind_1 = ind_curr
     ind_2 = offset+ind_1
@@ -80,6 +100,19 @@ def _add_element(
         use_sparse: bool, 
         tot_num_elements: int
 ):
+    """
+    Adds an element coupling ind_1 and ind_2 to the Hamiultonian
+
+    Inputs:
+        ind_1 (int) : The left-index of the term in the Hamiltonian
+        ind_2 (int) : The right-index of the term in the Hamiltonian
+        element (float) : The value of the element to add
+        diag_dict (dict) : A dict mapping offsets to list of diagonal elements
+        hamiltonian (np.ndarray | None) : If not use_sparse, contains the N-D Hamiltonian
+        use_sparse (bool) : Whether or not to use sparse methods 
+        tot_num_elements (int) : The total number of elements in the Hamiltonian
+    """
+
     if use_sparse:
         offset = ind_2 - ind_1
         _add_element_to_diag(offset, ind_1, element, diag_dict, tot_num_elements=tot_num_elements)
@@ -91,7 +124,14 @@ def _add_element(
 
 
 
-def coordinates_2D(index: int, nz: int) -> tuple[int, int]:
+def coordinates_2D(index: int, nz: int):
+    """
+    Returns the 2D coordinates of a cell with 1D index
+
+    Inputs:
+        index (int) : 1D index of the cell
+        nz (int) : Number of cells along z in the Hamiltonian
+    """
     i = int(np.floor(index/(nz)))
     k = int(np.remainder(index, nz))
 
@@ -99,6 +139,14 @@ def coordinates_2D(index: int, nz: int) -> tuple[int, int]:
 
 
 def _index_2D(i: int, k: int, nz: int) -> int:
+    """
+    Returns the 1D index of a cell with 2D coordinates
+
+    Inputs:
+        i (int) : The x-index of the cell
+        k (int) : The z-index of the cell
+        nz (int) : Number of cells along z in the Hamiltonian
+    """
     return i*nz + k
 
 
@@ -115,6 +163,23 @@ def _add_neighbor_couplings_2D(
         periodic: bool,
         use_sparse: bool,
     ):
+    """
+    Adds coupling to indices (i, k) in a 2D Hamiltonian
+
+    Inputs:
+        i (int) : x-index of the coupling term
+        k (int) : z-index of the coupling term
+        diag_dict (dict) : dict containing the diagonals of a sparse matrix at various offsets
+        hamiltonian (np.ndarray or None) : The 2D Hamiltonian matrix, if use_sparse = False
+        nn_coupling_z (float) : The nearest-neighbor coupling along z
+        nnn_coupling_z (float) : The next-nearest-neighbor coupling along z
+        nn_coupling_x (float) : The nearest-neighbor coupling along x
+        nx (int) : Number of cells along x in the Hamiltonian matrix
+        nz (int) : Number of cells along z in the Hamiltonian matrix
+        periodic (bool) : Whether or not to use periodic BCs
+        use_sparse (bool) : Whether or not to construct a sparse matrix 
+    """
+
     ind_curr = _index_2D(i, k, nz)
 
     # z couplings
@@ -163,7 +228,21 @@ def compute_2D_H(
 ):
     
     """
-    Constructs a 2D potential Hamiltonian
+    Constructs the 2D Hamiltonian.
+
+    Inputs:
+        nx (int) : Number of cells along x in the Hamiltonian matrix
+        nz (int) : Number of cells along z in the Hamiltonian matrix
+        onsite_func (callable) : A function that takes indices (i, k) and returns the onsite potential
+        nn_coupling_z (float) : The nearest-neighbor coupling along z
+        nnn_coupling_z (float) : The next-nearest-neighbor coupling along z
+        nn_coupling_x (float) : The nearest-neighbor coupling along x
+        use_sparse (bool) : Whether or not to construct a sparse matrix 
+        periodic (bool) : Whether or not to use periodic BCs
+
+    Returns:
+        Either the Hamiltonian matrix (2D np.ndarray) or a sparse list of diagonals, depending on the value of use_sparse
+    
     """
     
 
@@ -235,9 +314,27 @@ Helpers for the 3D potential solvers
 
     # assign a unique index to a lattice point
 def _index_3D(i: int, j: int, k: int, ny: int, nz: int) -> int:
+    """
+    Returns the 1D index of a cell with 3D coordinates
+
+    Inputs:
+        i (int) : The x-index of the cell 
+        j (int) : The y-index of the cell
+        k (int) : The z-index of the cell
+        ny (int) : Number of cells along y in the Hamiltonian
+        nz (int) : Number of cells along z in the Hamiltonian
+    """
     return i*ny*nz + j*nz + k
 
 def coordinates_3D(index: int, ny: int, nz: int):
+    """
+    Returns the 3D coordinates of a cell with 1D index
+
+    Inputs:
+        index (int) : 1D index of the cell
+        ny (int) : Number of cells along y in the Hamiltonian
+        nz (int) : Number of cells along z in the Hamiltonian
+    """
     i = int(np.floor(index/(ny*nz)))
     j = int(np.floor( np.remainder(index, (ny*nz)) / (nz) ))
     k = int(np.remainder(index,nz))
@@ -263,6 +360,26 @@ def _add_neighbor_couplings_3D(
     periodic: bool,
     use_sparse: bool,
 ):
+    """
+    Adds coupling to indices (i, j, k) in a 2D Hamiltonian
+
+    Inputs:
+        i (int) : x-index of the coupling term
+        j (int) : y-index of the coupling term
+        k (int) : z-index of the coupling term
+        diag_dict (dict) : dict containing the diagonals of a sparse matrix at various offsets
+        hamiltonian (np.ndarray or None) : The 2D Hamiltonian matrix, if use_sparse = False
+        nn_coupling_z (float) : The nearest-neighbor coupling along z
+        nnn_coupling_z (float) : The next-nearest-neighbor coupling along z
+        nn_coupling_x (float) : The nearest-neighbor coupling along x
+        nn_coupling_y (float) : The nearest-neighbor coupling along y
+        nx (int) : Number of cells along x in the Hamiltonian matrix
+        ny (int) : Number of cells along y in the Hamiltonian matrix
+        nz (int) : Number of cells along z in the Hamiltonian matrix
+        periodic (bool) : Whether or not to use periodic BCs
+        use_sparse (bool) : Whether or not to construct a sparse matrix 
+    """
+
     ind_curr = _index_3D(i, j, k, ny, nz)
 
     # z couplings
@@ -324,57 +441,76 @@ def compute_3D_H(
         use_sparse: bool,
         periodic: bool,
 ):
-        diag_dict = dict()
-        main_diag = np.zeros(nx * ny * nz)
-        tot_num_elements = nx * ny * nz
-        
-        if not use_sparse:
-            hamiltonian = np.zeros((nx*ny*nz, nx*ny*nz), dtype=np.double)
-        else:
-            hamiltonian = None
+    """
+    Constructs the 3D Hamiltonian.
 
-        for i in range(nx):
-            for j in range(ny):
-                for k in range(nz):
-                    ind_curr = _index_3D(i, j, k, ny, nz)
+    Inputs:
+        nx (int) : Number of cells along x in the Hamiltonian matrix
+        ny (int) : Number of cells along y in the Hamiltonian matrix
+        nz (int) : Number of cells along z in the Hamiltonian matrix
+        onsite_func (callable) : A function that takes indices (i, j, k) and returns the onsite potential
+        nn_coupling_z (float) : The nearest-neighbor coupling along z
+        nnn_coupling_z (float) : The next-nearest-neighbor coupling along z
+        nn_coupling_x (float) : The nearest-neighbor coupling along x
+        nn_coupling_y (float) : The nearest-neighbor coupling along y
+        use_sparse (bool) : Whether or not to construct a sparse matrix 
+        periodic (bool) : Whether or not to use periodic BCs
 
-                    # onsite terms
-                    on = onsite_func(i,j,k)
+    Returns:
+        Either the Hamiltonian matrix (3D np.ndarray) or a sparse list of diagonals, depending on the value of use_sparse
+    
+    """
+    diag_dict = dict()
+    main_diag = np.zeros(nx * ny * nz)
+    tot_num_elements = nx * ny * nz
+    
+    if not use_sparse:
+        hamiltonian = np.zeros((nx*ny*nz, nx*ny*nz), dtype=np.double)
+    else:
+        hamiltonian = None
 
-                    if use_sparse:
-                        _add_element_to_diag(0, ind_curr, on, diag_dict, tot_num_elements=tot_num_elements)
-                        main_diag[ind_curr] = on
-                    else:
-                        hamiltonian[ind_curr,ind_curr] = on
+    for i in range(nx):
+        for j in range(ny):
+            for k in range(nz):
+                ind_curr = _index_3D(i, j, k, ny, nz)
+
+                # onsite terms
+                on = onsite_func(i,j,k)
+
+                if use_sparse:
+                    _add_element_to_diag(0, ind_curr, on, diag_dict, tot_num_elements=tot_num_elements)
+                    main_diag[ind_curr] = on
+                else:
+                    hamiltonian[ind_curr,ind_curr] = on
 
 
-                    _add_neighbor_couplings_3D(
-                            i = i, 
-                            j = j,
-                            k = k, 
-                            diag_dict = diag_dict, 
-                            hamiltonian = hamiltonian,
-                            nn_coupling_z = nn_coupling_z,
-                            nnn_coupling_z = nnn_coupling_z,
-                            nn_coupling_x = nn_coupling_x,
-                            nn_coupling_y = nn_coupling_y,
-                            nx = nx,
-                            ny = ny,
-                            nz = nz,
-                            periodic = periodic,
-                            use_sparse = use_sparse,
-                    )
+                _add_neighbor_couplings_3D(
+                        i = i, 
+                        j = j,
+                        k = k, 
+                        diag_dict = diag_dict, 
+                        hamiltonian = hamiltonian,
+                        nn_coupling_z = nn_coupling_z,
+                        nnn_coupling_z = nnn_coupling_z,
+                        nn_coupling_x = nn_coupling_x,
+                        nn_coupling_y = nn_coupling_y,
+                        nx = nx,
+                        ny = ny,
+                        nz = nz,
+                        periodic = periodic,
+                        use_sparse = use_sparse,
+                )
 
-   
 
-        if use_sparse:
-            offsets = list()
-            diags = list()
-            for offset in diag_dict.keys():
-                offsets.append(offset)
-                diags.append(diag_dict[offset])
-            ham = sparse.diags(diags, offsets=offsets, shape=(nx*ny*nz, nx*ny*nz))
-        else:
-            ham = hamiltonian
 
-        return ham
+    if use_sparse:
+        offsets = list()
+        diags = list()
+        for offset in diag_dict.keys():
+            offsets.append(offset)
+            diags.append(diag_dict[offset])
+        ham = sparse.diags(diags, offsets=offsets, shape=(nx*ny*nz, nx*ny*nz))
+    else:
+        ham = hamiltonian
+
+    return ham

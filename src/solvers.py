@@ -7,7 +7,6 @@ import numpy as np
 import scipy.linalg as la
 import scipy.sparse.linalg as las
 from math import *
-from scipy import sparse
 from scipy.stats import rice, rayleigh
 
 import constants
@@ -62,6 +61,9 @@ class BaseSolver:
     
 
     def solve(self, n_lowest_eigenstates=2):
+        """
+        Solve the Hamiltonian for the first n_lowest_eigenstates eigenstates
+        """
 
         if self.n_eigenstates_calculated is not None and self.n_eigenstates_calculated >= n_lowest_eigenstates:
             return self._lowest_evals[:n_lowest_eigenstates], self._lowest_evecs[:,:n_lowest_eigenstates]
@@ -95,15 +97,6 @@ class BaseSolver:
         if self._H is None:
             self._compute_H()
         return self._H
-    
-    @property
-    def effective_1D_hamiltonian(self):
-        """
-        Lazily constructs an effective 1D potential by averaging the onsite terms across each layer.
-        """
-        if self._avg_onsites_by_layer is None:
-            self._compute_1D_potential_equivalent()
-        return self._avg_onsites_by_layer
     
 
     @property
@@ -142,6 +135,9 @@ class TwoBand(BaseSolver):
 
 
     def _compute_valley_splitting(self):
+        """
+        Compute the valley splitting as the energy difference between the first two eigenstates
+        """
         if self.n_eigenstates_calculated is None or self.n_eigenstates_calculated < 2:
             self.solve(n_lowest_eigenstates=2)
 
@@ -177,6 +173,9 @@ class TwoBand_1D(TwoBand):
         return self.vertical_field_potential(i) + self.fractional_cb_offset(self.effective_lattice[i])
 
     def _compute_H(self):
+        """
+        Construct the 1D TB Hamiltonian
+        """
 
         ham = helpers.compute_1D_H(
             nz = self.nz, 
@@ -186,18 +185,6 @@ class TwoBand_1D(TwoBand):
             use_sparse=self.sparse
         )
         self._H = ham
-
-        
-
-    def _compute_1D_potential_equivalent(self):
-        ham = self.hamiltonian
-        (nx, _) = np.shape(ham)
-        onsites = np.zeros(nx, dtype=np.double)
-
-        for i in range(nx):
-            onsites[i] = ham[i,i]
-
-        self._avg_onsites_by_layer = onsites
 
 
     def _normalize(self, evecs):
@@ -296,20 +283,32 @@ class TwoBand_2D(TwoBand):
 
 
     def _confinement(self, i):
+        """
+        The lateral confinement potential at index i
+        """
         x = i*self.dx
         c = (1/2) * constants.SI_TRANSVERSE_MASS*(self.omega_x**2 * (x-self.center_x)**2 ) / constants.ELEMENTARY_CHARGE # divide by e to convert to eV
         return c
     
-    def _qw_offset(self,i,k):
+    def _qw_offset(self, i, k):
+        """
+        The quantum well potential at index i, k
+        """
         s = self.effective_lattice[i,k]
         return self.fractional_cb_offset(s)
 
-    def _onsite_term(self,i,k):
+    def _onsite_term(self, i, k):
+        """
+        The potential terms at index i, k
+        """
         on = self.vertical_field_potential(k) + self._confinement(i) + self._qw_offset(i,k)
         return on
 
 
     def _compute_H(self):
+        """
+        Construct the 2D TB Hamiltonian
+        """
 
         ham = helpers.compute_2D_H(
             nx = self.nx, 
@@ -325,18 +324,10 @@ class TwoBand_2D(TwoBand):
         self._H = ham
 
 
-    def _compute_1D_potential_equivalent(self, l):
-        """
-        Return array of onsites at given layer
-        """
-        onsites = np.zeros(self.nx)
-        for i in range(self.nx):
-            on = self._onsite_term(i,l)
-            onsites[i] = on
-        return onsites
-
-
     def wf_2D_matrix_from_vector(self, v):
+        """
+        Convert 1D vectors into 2D arrays
+        """
 
         mat = np.zeros((self.nx, self.nz), dtype=np.double)
         for ind in range(len(v)):
@@ -347,6 +338,9 @@ class TwoBand_2D(TwoBand):
     
 
     def _normalize(self, evecs):
+        """
+        Normalize the wavefunctions
+        """
         return evecs / np.linalg.norm(evecs, axis=0) / np.sqrt(self.dz * self.dx)
     
 
@@ -492,9 +486,25 @@ class TwoBand_3D(TwoBand):
 
         self.nn_coupling_x = -constants.HBAR**2 / (2 * constants.SI_TRANSVERSE_MASS * self.dx**2) / constants.ELEMENTARY_CHARGE
         self.nn_coupling_y = -constants.HBAR**2 / (2 * constants.SI_TRANSVERSE_MASS * self.dy**2) / constants.ELEMENTARY_CHARGE 
+
+        # These will be computed if called for
+        self._x00_nm = None
+        self._x01_nm = None 
+        self._x11_nm = None
+
+        self._y00_nm = None
+        self._y01_nm = None 
+        self._y11_nm = None
+
+        self._z00_nm = None
+        self._z01_nm = None 
+        self._z11_nm = None
      
 
     def _confinement(self, i, j):
+        """
+        The lateral confinement at index i, j
+        """
         if self.periodic == False:
             x = i*self.dx
             y = j*self.dy
@@ -504,16 +514,25 @@ class TwoBand_3D(TwoBand):
         else:
             return 0
         
-    def _qw_offset(self,i,j,k):
+    def _qw_offset(self, i, j, k):
+        """
+        The quantum well potential at index i, j, k
+        """
         s = self.effective_lattice[i,j,k]
         return self.fractional_cb_offset(s)
 
-    def _onsite_term(self,i,j,k):
+    def _onsite_term(self, i, j, k):
+        """
+        The potential terms at index i, j, k
+        """
         on = self.vertical_field_potential(k) + self._confinement(i,j) + self._qw_offset(i,j,k)
         return on
 
 
     def _compute_H(self):
+        """
+        Construct the 3D TB Hamiltonian
+        """
 
         ham = helpers.compute_3D_H(
                 nx = self.nx, 
@@ -528,67 +547,13 @@ class TwoBand_3D(TwoBand):
                 periodic = self.periodic,
         )
         self._H = ham
-
-
-
-
-    def _compute_1D_potential_equivalent(self):
-
-        diag_dict = dict()
-        main_diag = np.zeros(self.nx*self.ny*self.nz)
-
-        onsites_by_layer = np.zeros(self.nz, dtype=np.double)
-        
-        if not self.sparse:
-            hamiltonian = np.zeros((self.nx*self.ny*self.nz, self.nx*self.ny*self.nz), dtype=np.double)
-        else:
-            hamiltonian = None
-
-        for k in range(self.nz):
-            avg_onsite = 0
-
-            for i in range(self.nx):
-                for j in range(self.ny):
-
-                    # Compute the average onsite term
-                    on = self._onsite_term(i,j,k)
-                    avg_onsite += on
-
-                    self._add_neighbor_couplings(i,j,k,diag_dict,hamiltonian)
-
-   
-
-            # Now, add the average onsite term to each atom in the layer
-            avg_onsite = avg_onsite/(self.nx*self.ny)
-
-            onsites_by_layer[k] = avg_onsite
-
-            for i in range(self.nx):
-                for j in range(self.ny):
-                    ind_curr = self._index(i,j,k)
-                    if self.sparse:
-                        self._add_element_to_diag(0,ind_curr, avg_onsite, diag_dict)
-                        main_diag[ind_curr] = avg_onsite
-                        hamiltonian = None
-                    else:
-                        hamiltonian[ind_curr,ind_curr] = avg_onsite
-
-        if self.sparse:
-            offsets = list()
-            diags = list()
-            for offset in diag_dict.keys():
-                offsets.append(offset)
-                diags.append(diag_dict[offset])
-            self._H_x_avg_onsite = sparse.diags(diags, offsets=offsets, shape=(self.nx*self.ny*self.nz,self.nx*self.ny*self.nz))
-        else:
-            self._H_x_avg_onsite = hamiltonian
-
-        self._avg_onsites_by_layer = onsites_by_layer
-
     
 
 
     def wf_3D_matrix_from_vector(self, v):
+        """
+        Convert 1D vectors into 3D arrays
+        """
 
         mat = np.zeros((self.nx, self.ny, self.nz), dtype=np.double)
         for ind in range(len(v)):
@@ -599,7 +564,127 @@ class TwoBand_3D(TwoBand):
     
 
     def _normalize(self, evecs):
+        """
+        Normalize wavefunctions
+        """
         return evecs / np.linalg.norm(evecs, axis=0) / np.sqrt(self.dz * self.dx * self.dy)
+    
+
+    @property
+    def x00_nm(self):
+        """
+        Lazily computes the dipolar matrix element x00
+        """
+        if self._x00_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._x00_nm
+    
+    @property
+    def x11_nm(self):
+        """
+        Lazily computes the dipolar matrix element x11
+        """
+        if self._x11_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._x11_nm
+    
+    @property
+    def x01_nm(self):
+        """
+        Lazily computes the dipolar matrix element x01
+        """
+        if self._x01_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._x01_nm
+    
+    @property
+    def y00_nm(self):
+        """
+        Lazily computes the dipolar matrix element y00
+        """
+        if self._y00_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._y00_nm
+    
+    @property
+    def y11_nm(self):
+        """
+        Lazily computes the dipolar matrix element y11
+        """
+        if self._y11_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._y11_nm
+    
+    @property
+    def y01_nm(self):
+        """
+        Lazily computes the dipolar matrix element y01
+        """
+        if self._y01_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._y01_nm
+    
+    @property
+    def z00_nm(self):
+        """
+        Lazily computes the dipolar matrix element z00
+        """
+        if self._z00_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._z00_nm
+    
+    @property
+    def z11_nm(self):
+        """
+        Lazily computes the dipolar matrix element z11
+        """
+        if self._z11_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._z11_nm
+    
+    @property
+    def z01_nm(self):
+        """
+        Lazily computes the dipolar matrix element z01
+        """
+        if self._z01_nm is None:
+            self._compute_dipolar_matrix_elements()
+        return self._z01_nm
+
+    def _compute_dipolar_matrix_elements(self):
+        """
+        Lazily computes the dipolar matrix elements between ground and excited valleys.
+
+        For x matrix elements, we set the origin at center_x.
+        """
+        if self.n_eigenstates_calculated is None or self.n_eigenstates_calculated < 2:
+            self.solve(n_lowest_eigenstates=2)
+
+        x_range = np.arange(self.nx) * self.dx
+        y_range = np.arange(self.ny) * self.dy
+        z_range = np.arange(self.nz) * self.dz
+    
+        ys, xs, zs = np.meshgrid(y_range, x_range, z_range)
+
+        xs = xs - self.center_x
+        ys = ys - self.center_y
+
+        v0 = self.wf_3D_matrix_from_vector(self._lowest_evecs[:,0])
+        v1 = self.wf_3D_matrix_from_vector(self._lowest_evecs[:,1])
+
+
+        # Compute x and z matrix elements, converting to nm
+        self._x00_nm = 1e9 * np.sum(self.dx * self.dy * self.dz * v0 * v0 * xs)
+        self._x01_nm = 1e9 * np.sum(self.dx * self.dy * self.dz * v0 * v1 * xs)
+        self._x11_nm = 1e9 * np.sum(self.dx * self.dy * self.dz * v1 * v1 * xs)
+
+        self._y00_nm = 1e9 * np.sum(self.dx * self.dy * self.dz * v0 * v0 * ys)
+        self._y01_nm = 1e9 * np.sum(self.dx * self.dy * self.dz * v0 * v1 * ys)
+        self._y11_nm = 1e9 * np.sum(self.dx * self.dy * self.dz * v1 * v1 * ys)
+
+        self._z00_nm = 1e9 * np.sum(self.dx * self.dy * self.dz * v0 * v0 * zs)
+        self._z01_nm = 1e9 * np.sum(self.dx * self.dy * self.dz * v0 * v1 * zs)
+        self._z11_nm = 1e9 * np.sum(self.dx * self.dy * self.dz * v1 * v1 * zs)
 
         
 
@@ -629,6 +714,9 @@ class EffectiveMass(BaseSolver):
 
 
     def _compute_valley_splitting(self):
+        """
+        Lazily compute the valley splitting using EM theory
+        """
         if self._inter_valley_coupling is None:
             self._compute_inter_valley_coupling()
         
@@ -638,11 +726,17 @@ class EffectiveMass(BaseSolver):
 
     @property
     def inter_valley_coupling(self):
+        """
+        Lazily compute the inter-valley coupling using EM theory
+        """
         if self._inter_valley_coupling is None:
             self._compute_inter_valley_coupling()
         return self._inter_valley_coupling
     
     def sigma_delta(self, dot_size_nm):
+        """
+        Compute sigma_delta given the dot size (equal to sqrt(HBAR / SI_TRANSVERSE_MASS / omega))
+        """
         return self._compute_sigma_delta(dot_size_nm)
   
 
@@ -689,6 +783,9 @@ class EffectiveMass_1D(EffectiveMass):
         return self.vertical_field_potential(i) + self.fractional_cb_offset(self.effective_lattice[i])
 
     def _compute_H(self):
+        """
+        Construct the 1D EM Hamiltonian
+        """
         ham = helpers.compute_1D_H(
             nz = self.nz, 
             onsite_func = self._onsite_term, 
@@ -698,19 +795,12 @@ class EffectiveMass_1D(EffectiveMass):
         )
 
         self._H = ham
- 
-    def _compute_1D_potential_equivalent(self):
-        ham = self.hamiltonian
-        (nx, _) = np.shape(ham)
-        onsites = np.zeros(nx, dtype=np.double)
-
-        for i in range(nx):
-            onsites[i] = ham[i,i]
-
-        self._avg_onsites_by_layer = onsites
 
 
     def _compute_inter_valley_coupling(self):
+        """
+        Compute the inter-valley coupling from self.effective_lattice using EM theory
+        """
         _, v0 = self.solve(n_lowest_eigenstates=1)
         psi_0 = v0[:,0]
 
@@ -786,20 +876,32 @@ class EffectiveMass_2D(EffectiveMass):
 
     
     def _confinement(self, i):
+        """
+        Horizontal confinement term at index i
+        """
         x = i*self.dx
         c = (1/2) * constants.SI_TRANSVERSE_MASS*(self.omega_x**2 * (x-self.center_x)**2 ) / constants.ELEMENTARY_CHARGE # divide by e to convert to eV
         return c
     
-    def _qw_offset(self,i,k):
+    def _qw_offset(self, i, k):
+        """
+        QW offset potential at index i, k
+        """
         s = self.effective_lattice[i,k]
         return self.fractional_cb_offset(s)
 
-    def _onsite_term(self,i,k):
+    def _onsite_term(self, i, k):
+        """
+        Sum of potential terms at index i, k
+        """
         on = self.vertical_field_potential(k) + self._confinement(i) + self._qw_offset(i,k)
         return on
 
 
     def _compute_H(self):
+        """
+        Construct 2D EM Hamiltonian
+        """
 
         ham = helpers.compute_2D_H(
             nx = self.nx, 
@@ -815,6 +917,9 @@ class EffectiveMass_2D(EffectiveMass):
         self._H = ham
 
     def wf_2D_matrix_from_vector(self, v):
+        """
+        Convert from a 1D vector to a 2D array
+        """
 
         mat = np.zeros((self.nx, self.nz), dtype=np.double)
         for ind in range(len(v)):
@@ -825,6 +930,9 @@ class EffectiveMass_2D(EffectiveMass):
     
 
     def _compute_inter_valley_coupling(self):
+        """
+        Computing the inter-valley coupling using self.effective_lattice and effective mass theory
+        """
         _, v0 = self.solve(n_lowest_eigenstates=1)
         psi_0 = self.wf_2D_matrix_from_vector(v0[:,0])
 
@@ -914,22 +1022,34 @@ class EffectiveMass_3D(EffectiveMass):
 
 
     def _confinement(self, i, j):
+        """
+        Horizontal confinement term at index i, j
+        """
         x = i*self.dx
         y = j*self.dy
 
         c = (1/2)*constants.SI_TRANSVERSE_MASS*(self.omega_x**2 * (x-self.center_x)**2 + self.omega_y**2 * (y-self.center_y)**2)/constants.ELEMENTARY_CHARGE # divide by e to convert to eV
         return c
     
-    def _qw_offset(self,i,j,k):
+    def _qw_offset(self, i, j, k):
+        """
+        QW Offset potential term at index i, j, k
+        """
         s = self.effective_lattice[i,j,k]
         return self.fractional_cb_offset(s)
 
-    def _onsite_term(self,i,j,k):
+    def _onsite_term(self, i, j, k):
+        """
+        Sum of potential terms at index i, j, k
+        """
         on = self.vertical_field_potential(k) + self._confinement(i,j) + self._qw_offset(i,j,k)
         return on
 
 
     def _compute_H(self):
+        """
+        Construct 3D EM Hamiltonian
+        """
 
         ham = helpers.compute_3D_H(
                 nx = self.nx, 
@@ -947,6 +1067,9 @@ class EffectiveMass_3D(EffectiveMass):
         self._H = ham
 
     def wf_3D_matrix_from_vector(self, v):
+        """
+        Convert from 1D vector to 3D array
+        """
 
         mat = np.zeros((self.nx, self.ny, self.nz), dtype=np.double)
         for ind in range(len(v)):
@@ -957,6 +1080,9 @@ class EffectiveMass_3D(EffectiveMass):
     
 
     def _compute_inter_valley_coupling(self):
+        """
+        Compute the inter-valley coupling from self.effective_lattice using EM theory
+        """
         _, v0 = self.solve(n_lowest_eigenstates=1)
         psi_0 = self.wf_3D_matrix_from_vector(v0[:,0])
 
