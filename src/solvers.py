@@ -491,118 +491,8 @@ class TwoBand_3D(TwoBand):
         self.omega_y = constants.ELEMENTARY_CHARGE * self.lateral_confinement_energy_y / constants.HBAR
 
         self.nn_coupling_x = -constants.HBAR**2 / (2 * constants.SI_TRANSVERSE_MASS * self.dx**2) / constants.ELEMENTARY_CHARGE
-        self.nn_coupling_y = -constants.HBAR**2 / (2 * constants.SI_TRANSVERSE_MASS * self.dy**2) / constants.ELEMENTARY_CHARGE
-
-
-    def _nearest_neighbor_coords(self,i,j,k):
-        nn_inds = list()
-
-        if i-1 >= 0:
-            nn_inds.append((i-1,j,k))
-        elif self.periodic:
-            nn_inds.append((self.nx-1,j,k))
-        if i+1 < self.nx:
-            nn_inds.append((i+1,j,k))
-        elif self.periodic:
-            nn_inds.append((0,j,k))
-
-        if j-1 >= 0:
-            nn_inds.append((i,j-1,k))
-        elif self.periodic:
-            nn_inds.append((i,self.ny-1,k))
-        if j+1 < self.ny:
-            nn_inds.append((i,j+1,k))
-        elif self.periodic:
-            nn_inds.append((i,0,k))
-
-        if k-1 >= 0:
-            nn_inds.append((i,j,k-1))
-        if k+1 < self.nz:
-            nn_inds.append((i,j,k+1))
-
-        return nn_inds
-
-        # assign a unique index to a lattice point
-    def _index(self, i, j, k):
-        return i*self.ny*self.nz + j*self.nz + k
-
-    def _coordinates(self, index):
-        i = int(np.floor(index/(self.ny*self.nz)))
-        j = int(np.floor( np.remainder(index, (self.ny*self.nz)) / (self.nz) ))
-        k = int(np.remainder(index,self.nz))
-
-        return (i,j,k)
-
-
-    def _add_element_to_diag(self, offset, ind_curr, element, diag_dict):
-
-        ind_1 = ind_curr
-        ind_2 = offset+ind_1
-        ind_d = max(ind_1,ind_2)
-        if offset in diag_dict.keys():
-            diag_dict[offset][ind_d-abs(offset)] = element
-        else:
-            diag_list = np.zeros(self.nx*self.ny*self.nz - abs(offset))
-            diag_list[ind_d-abs(offset)] = element
-            diag_dict[offset] = diag_list
-
-
-    def _add_element(self, ind_1, ind_2, element, diag_dict, hamiltonian):
-        if self.sparse:
-            offset = ind_2 - ind_1
-            self._add_element_to_diag(offset, ind_1, element, diag_dict)
-        else:
-            hamiltonian[ind_1,ind_2] = element
-
-
-    def _add_neighbor_couplings(self, i, j, k, diag_dict, hamiltonian):
-        ind_curr = self._index(i,j,k)
-
-        # z couplings
-        if k-1 >= 0:
-            ind_z = self._index(i,j,k-1)
-            self._add_element(ind_curr,ind_z,self.nn_coupling_z, diag_dict, hamiltonian)
-        if k-2 >= 0:
-            ind_z = self._index(i,j,k-2)
-            self._add_element(ind_curr,ind_z,self.nnn_coupling_z, diag_dict, hamiltonian)
-        if k+1 < self.nz:
-            ind_z = self._index(i,j,k+1)
-            self._add_element(ind_curr,ind_z,self.nn_coupling_z, diag_dict, hamiltonian)
-        if k+2 < self.nz:
-            ind_z = self._index(i,j,k+2)
-            self._add_element(ind_curr,ind_z,self.nnn_coupling_z, diag_dict, hamiltonian)
-
-        # x couplings
-        if i-1 >= 0:
-            ind_x = self._index(i-1,j,k)
-            self._add_element(ind_curr,ind_x,self.nn_coupling_x, diag_dict, hamiltonian)
-        elif self.periodic:
-            ind_x = self._index(self.nx-1,j,k)
-            self._add_element(ind_curr,ind_x,self.nn_coupling_x, diag_dict, hamiltonian)
-
-        if i+1 < self.nx:
-            ind_x = self._index(i+1,j,k)
-            self._add_element(ind_curr,ind_x,self.nn_coupling_x, diag_dict, hamiltonian)
-        elif self.periodic:
-            ind_x = self._index(0,j,k)
-            self._add_element(ind_curr,ind_x,self.nn_coupling_x, diag_dict, hamiltonian)
-           
-        # y couplings
-        if j-1 >= 0:
-            ind_y = self._index(i,j-1,k)
-            self._add_element(ind_curr,ind_y,self.nn_coupling_y, diag_dict, hamiltonian)
-        elif self.periodic:
-            ind_y = self._index(i,self.ny-1,k)
-            self._add_element(ind_curr,ind_y,self.nn_coupling_y, diag_dict, hamiltonian)
-
-        if j+1 < self.ny:
-            ind_y = self._index(i,j+1,k)
-            self._add_element(ind_curr,ind_y,self.nn_coupling_y, diag_dict, hamiltonian)
-        elif self.periodic:
-            ind_y = self._index(i,0,k)
-            self._add_element(ind_curr,ind_y,self.nn_coupling_y, diag_dict, hamiltonian)
-
-
+        self.nn_coupling_y = -constants.HBAR**2 / (2 * constants.SI_TRANSVERSE_MASS * self.dy**2) / constants.ELEMENTARY_CHARGE 
+     
 
     def _confinement(self, i, j):
         if self.periodic == False:
@@ -614,7 +504,6 @@ class TwoBand_3D(TwoBand):
         else:
             return 0
         
-
     def _qw_offset(self,i,j,k):
         s = self.effective_lattice[i,j,k]
         return self.fractional_cb_offset(s)
@@ -625,43 +514,20 @@ class TwoBand_3D(TwoBand):
 
 
     def _compute_H(self):
-        diag_dict = dict()
-        main_diag = np.zeros(self.nx*self.ny*self.nz)
-        
-        if not self.sparse:
-            hamiltonian = np.zeros((self.nx*self.ny*self.nz, self.nx*self.ny*self.nz), dtype=np.double)
-        else:
-            hamiltonian = None
 
-        for i in range(self.nx):
-            for j in range(self.ny):
-                for k in range(self.nz):
-                    ind_curr = self._index(i,j,k)
-
-                    # onsite terms
-                    on = self._onsite_term(i,j,k)
-
-                    if self.sparse:
-                        self._add_element_to_diag(0,ind_curr,on, diag_dict)
-                        main_diag[ind_curr] = on
-                        hamiltonian = None
-                    else:
-                        hamiltonian[ind_curr,ind_curr] = on
-
-
-                    self._add_neighbor_couplings(i,j,k,diag_dict,hamiltonian)
-
-   
-
-        if self.sparse:
-            offsets = list()
-            diags = list()
-            for offset in diag_dict.keys():
-                offsets.append(offset)
-                diags.append(diag_dict[offset])
-            self._H = sparse.diags(diags, offsets=offsets, shape=(self.nx*self.ny*self.nz,self.nx*self.ny*self.nz))
-        else:
-            self._H = hamiltonian
+        ham = helpers.compute_3D_H(
+                nx = self.nx, 
+                ny = self.ny,
+                nz = self.nz, 
+                onsite_func = self._onsite_term,
+                nn_coupling_z = self.nn_coupling_z, 
+                nnn_coupling_z = self.nnn_coupling_z,
+                nn_coupling_x = self.nn_coupling_x,
+                nn_coupling_y = self.nn_coupling_y,
+                use_sparse = self.sparse,
+                periodic = self.periodic,
+        )
+        self._H = ham
 
 
 
@@ -726,18 +592,7 @@ class TwoBand_3D(TwoBand):
 
         mat = np.zeros((self.nx, self.ny, self.nz), dtype=np.double)
         for ind in range(len(v)):
-            (i,j,k) = self._coordinates(ind)
-            mat[i,j,k] = v[ind]
-
-        return mat
-
-
-
-    def wf_3D_matrix_from_vector(self, v):
-
-        mat = np.zeros((self.nx, self.ny, self.nz), dtype=np.double)
-        for ind in range(len(v)):
-            (i,j,k) = self._coordinates(ind)
+            (i,j,k) = helpers.coordinates_3D(ind, ny=self.ny, nz=self.nz)
             mat[i,j,k] = v[ind]
 
         return mat
@@ -999,4 +854,134 @@ class EffectiveMass_2D(EffectiveMass):
     
 
        
+
+
+
+
+
+@dataclass
+class EffectiveMass_3D(EffectiveMass):
+
+    dx_nm: float | None = None
+    dy_nm: float | None = None
+
+    center_x_nm: float | None = None # center of the confinement (x) in nm
+    center_y_nm: float | None = None # center of the confinement (y) in nm
+
+    lateral_confinement_energy_x: float = 2e-3 # eV
+    lateral_confinement_energy_y: float = 2e-3 # eV
+
+    periodic: bool = False # if we should use periodic BCs
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if len(np.shape(self.effective_lattice)) != 3:
+            raise ValueError("The effective lattice should be a 3D array for the 3D model")
+
+        if self.dx_nm is None:
+            raise ValueError("Please specify a lattice spacing dx_nm for the 3D model")
+        
+        if self.dy_nm is None:
+            raise ValueError("Please specify a lattice spacing dy_nm for the 3D model")
+
+        self.dx = 1e-9*self.dx_nm
+        self.dy = 1e-9*self.dy_nm
+
+        (nx, ny, nz) = np.shape(self.effective_lattice)
+        self.nx = nx
+        self.ny = ny
+        self.nz = nz
+
+        if self.center_x_nm is None:
+            self.center_x_nm = self.dx_nm * nx/2
+            self.center_x = 1e-9*self.center_x_nm
+        else:
+            self.center_x = (1e-9)*self.center_x_nm
+
+        if self.center_y_nm is None:
+            self.center_y_nm = self.dy_nm * ny/2
+            self.center_y = 1e-9*self.center_y_nm
+        else:
+            self.center_y = (1e-9)*self.center_y_nm
+
+
+        self.omega_x = constants.ELEMENTARY_CHARGE * self.lateral_confinement_energy_x / constants.HBAR
+        self.omega_y = constants.ELEMENTARY_CHARGE * self.lateral_confinement_energy_y / constants.HBAR
+
+        self.nn_coupling_x = -constants.HBAR**2 / (2 * constants.SI_TRANSVERSE_MASS * self.dx**2) / constants.ELEMENTARY_CHARGE
+        self.nn_coupling_y = -constants.HBAR**2 / (2 * constants.SI_TRANSVERSE_MASS * self.dy**2) / constants.ELEMENTARY_CHARGE
+
+
+    def _confinement(self, i, j):
+        x = i*self.dx
+        y = j*self.dy
+
+        c = (1/2)*constants.SI_TRANSVERSE_MASS*(self.omega_x**2 * (x-self.center_x)**2 + self.omega_y**2 * (y-self.center_y)**2)/constants.ELEMENTARY_CHARGE # divide by e to convert to eV
+        return c
+    
+    def _qw_offset(self,i,j,k):
+        s = self.effective_lattice[i,j,k]
+        return self.fractional_cb_offset(s)
+
+    def _onsite_term(self,i,j,k):
+        on = self.vertical_field_potential(k) + self._confinement(i,j) + self._qw_offset(i,j,k)
+        return on
+
+
+    def _compute_H(self):
+
+        ham = helpers.compute_3D_H(
+                nx = self.nx, 
+                ny = self.ny,
+                nz = self.nz, 
+                onsite_func = self._onsite_term,
+                nn_coupling_z = self.nn_coupling_z, 
+                nnn_coupling_z = 0,
+                nn_coupling_x = self.nn_coupling_x,
+                nn_coupling_y = self.nn_coupling_y,
+                use_sparse = self.sparse,
+                periodic = self.periodic,
+        )
+
+        self._H = ham
+
+    def wf_3D_matrix_from_vector(self, v):
+
+        mat = np.zeros((self.nx, self.ny, self.nz), dtype=np.double)
+        for ind in range(len(v)):
+            (i,j,k) = helpers.coordinates_3D(ind, ny=self.ny, nz=self.nz)
+            mat[i,j,k] = v[ind]
+
+        return mat
+    
+
+    def _compute_inter_valley_coupling(self):
+        _, v0 = self.solve(n_lowest_eigenstates=1)
+        psi_0 = self.wf_3D_matrix_from_vector(v0[:,0])
+
+        z_arr = 1e-9 * np.arange(self.nz) * self.dz_nm
+
+        pot_arr = self.fractional_cb_offset(self.effective_lattice)
+        coupling = np.sum(self.dz * self.dx * self.dy * np.abs(psi_0**2) * np.exp(-1j * 2 * constants.K_0 * z_arr) * pot_arr)
+
+        self._inter_valley_coupling = coupling
+        return coupling
+    
+    
+    def _compute_sigma_delta(self, dot_size_nm):
+        """
+        Computing the standard deviation of the inter-valley coupling.
+        """
+       
+        raise NotImplementedError("Not yet implemented")
+    
+
+    def _normalize(self, evecs):
+        """
+        When normalizing the envelope functions, ensure the maximum amplitude is positive
+        """
+        return evecs / np.linalg.norm(evecs, axis=0) / np.sqrt(self.dz * self.dx * self.dy) * np.sign(np.max(evecs, axis=0))
+    
+
 

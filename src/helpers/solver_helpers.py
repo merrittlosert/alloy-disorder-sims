@@ -221,3 +221,160 @@ def compute_2D_H(
         ham = hamiltonian
 
     return ham
+
+
+
+
+
+
+
+"""
+Helpers for the 3D potential solvers
+"""
+
+
+    # assign a unique index to a lattice point
+def _index_3D(i: int, j: int, k: int, ny: int, nz: int) -> int:
+    return i*ny*nz + j*nz + k
+
+def coordinates_3D(index: int, ny: int, nz: int):
+    i = int(np.floor(index/(ny*nz)))
+    j = int(np.floor( np.remainder(index, (ny*nz)) / (nz) ))
+    k = int(np.remainder(index,nz))
+
+    return (i,j,k)
+
+
+
+
+def _add_neighbor_couplings_3D(
+    i: int, 
+    j: int,
+    k: int, 
+    diag_dict: dict, 
+    hamiltonian: np.ndarray | None,
+    nn_coupling_z: float,
+    nnn_coupling_z: float,
+    nn_coupling_x: float,
+    nn_coupling_y: float,
+    nx: int,
+    ny: int,
+    nz: int,
+    periodic: bool,
+    use_sparse: bool,
+):
+    ind_curr = _index_3D(i, j, k, ny, nz)
+
+    # z couplings
+    if k-1 >= 0:
+        ind_z = _index_3D(i, j, k-1, ny=ny, nz=nz)
+        _add_element(ind_curr, ind_z, nn_coupling_z, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*ny*nz)
+    if k-2 >= 0:
+        ind_z = _index_3D(i, j, k-2, ny=ny, nz=nz)
+        _add_element(ind_curr, ind_z, nnn_coupling_z, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*ny*nz)
+    if k+1 < nz:
+        ind_z = _index_3D(i, j, k+1, ny=ny, nz=nz)
+        _add_element(ind_curr,ind_z, nn_coupling_z, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*ny*nz)
+    if k+2 < nz:
+        ind_z = _index_3D(i, j, k+2, ny=ny, nz=nz)
+        _add_element(ind_curr,ind_z, nnn_coupling_z, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*ny*nz)
+
+    # x couplings
+    if i-1 >= 0:
+        ind_x = _index_3D(i-1, j, k, ny=ny, nz=nz)
+        _add_element(ind_curr, ind_x, nn_coupling_x, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*ny*nz)
+    elif periodic:
+        ind_x = _index_3D(nx-1, j, k, ny=ny, nz=nz)
+        _add_element(ind_curr, ind_x, nn_coupling_x, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*ny*nz)
+
+    if i+1 < nx:
+        ind_x = _index_3D(i+1, j, k, ny=ny, nz=nz)
+        _add_element(ind_curr, ind_x, nn_coupling_x, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*ny*nz)
+    elif periodic:
+        ind_x = _index_3D(0, j, k, ny=ny, nz=nz)
+        _add_element(ind_curr, ind_x, nn_coupling_x, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*ny*nz)
+        
+    # y couplings
+    if j-1 >= 0:
+        ind_y = _index_3D(i, j-1, k, ny=ny, nz=nz)
+        _add_element(ind_curr, ind_y, nn_coupling_y, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*ny*nz)
+    elif periodic:
+        ind_y = _index_3D(i, ny-1, k, ny=ny, nz=nz)
+        _add_element(ind_curr,ind_y, nn_coupling_y, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*ny*nz)
+
+    if j+1 < ny:
+        ind_y = _index_3D(i, j+1, k, ny=ny, nz=nz)
+        _add_element(ind_curr, ind_y, nn_coupling_y, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*ny*nz)
+    elif periodic:
+        ind_y = _index_3D(i, 0, k, ny=ny, nz=nz)
+        _add_element(ind_curr, ind_y, nn_coupling_y, diag_dict, hamiltonian, use_sparse=use_sparse, tot_num_elements=nx*ny*nz)
+
+
+
+
+def compute_3D_H(
+        nx: int, 
+        ny: int,
+        nz: int, 
+        onsite_func: callable,
+        nn_coupling_z: float, 
+        nnn_coupling_z: float,
+        nn_coupling_x: float,
+        nn_coupling_y: float,
+        use_sparse: bool,
+        periodic: bool,
+):
+        diag_dict = dict()
+        main_diag = np.zeros(nx * ny * nz)
+        tot_num_elements = nx * ny * nz
+        
+        if not use_sparse:
+            hamiltonian = np.zeros((nx*ny*nz, nx*ny*nz), dtype=np.double)
+        else:
+            hamiltonian = None
+
+        for i in range(nx):
+            for j in range(ny):
+                for k in range(nz):
+                    ind_curr = _index_3D(i, j, k, ny, nz)
+
+                    # onsite terms
+                    on = onsite_func(i,j,k)
+
+                    if use_sparse:
+                        _add_element_to_diag(0, ind_curr, on, diag_dict, tot_num_elements=tot_num_elements)
+                        main_diag[ind_curr] = on
+                    else:
+                        hamiltonian[ind_curr,ind_curr] = on
+
+
+                    _add_neighbor_couplings_3D(
+                            i = i, 
+                            j = j,
+                            k = k, 
+                            diag_dict = diag_dict, 
+                            hamiltonian = hamiltonian,
+                            nn_coupling_z = nn_coupling_z,
+                            nnn_coupling_z = nnn_coupling_z,
+                            nn_coupling_x = nn_coupling_x,
+                            nn_coupling_y = nn_coupling_y,
+                            nx = nx,
+                            ny = ny,
+                            nz = nz,
+                            periodic = periodic,
+                            use_sparse = use_sparse,
+                    )
+
+   
+
+        if use_sparse:
+            offsets = list()
+            diags = list()
+            for offset in diag_dict.keys():
+                offsets.append(offset)
+                diags.append(diag_dict[offset])
+            ham = sparse.diags(diags, offsets=offsets, shape=(nx*ny*nz, nx*ny*nz))
+        else:
+            ham = hamiltonian
+
+        return ham

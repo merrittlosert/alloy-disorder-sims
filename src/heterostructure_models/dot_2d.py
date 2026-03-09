@@ -16,14 +16,9 @@ class Dot2D:
     si_concentrations: np.ndarray # 1D array of Si concentrations for each layer
 
     nx: int = 100 # number of lattice sites along x direction
-    dx: float = constants.SI_LATTICE_CONSTANT # lattice spacing in x direction, in m
-    dx_nm: float = dx * 1e9
+    dx_unit_cells: int = 1 # spacing in units of a0
 
-    disorder_model: str = 'alloy' # Options: 'none', 'alloy'
     step_model: str = 'none' # Options: 'none', 'single-step', 'staircase', or 'custom'
-
-
-    y_orbital_spacing: float | None = None # the orbital confinement energy along the y direction, in eV
 
     # For single-step model, the index of the step location along x, in units of dx.
     # For staircase models, the index is the location of one of the steps, and the rest are determined by step_spacing.
@@ -36,19 +31,11 @@ class Dot2D:
     step_magnitudes: list[int] | int | None = None
     
     def __post_init__(self):
-        self.n_layers = len(self.si_concentrations)
+
+        self.dx = self.dx_unit_cells * constants.SI_LATTICE_CONSTANT # lattice spacing in x direction, in m
+        self.dx_nm = 1e9 * self.dx
 
         self.effective_lattice = None
-
-
-        if self.disorder_model == 'alloy':
-            if self.y_orbital_spacing is None:
-                raise ValueError('Must specify y_orbital_spacing for alloy disorder model.')
-            
-            #self._n_eff_y = np.ceil(constants.HBAR**2 / (2*constants.ELECTRON_MASS_SI * self.y_orbital_spacing * constants.ELECTRON_CHARGE) / self.dx_nm**2)
-            omega = self.y_orbital_spacing * constants.ELEMENTARY_CHARGE / constants.HBAR
-            ay = np.sqrt(constants.HBAR / constants.SI_TRANSVERSE_MASS / omega)
-            self._n_eff_y = 2 * np.sqrt(2 * np.pi) * ay * self.dx / constants.SI_LATTICE_CONSTANT**2
 
         if self.step_model == 'single-step' or self.step_model == 'staircase':
             if self.step_position is None or not isinstance(self.step_position, int):
@@ -111,7 +98,7 @@ class Dot2D:
 
             
         if self.step_model == 'none':
-            # Use the relevant function to generate the 2D lattice, depending on the type of disorder used
+            # Use the relevant function to generate the 2D lattice, depending on the type of steps
             self._generate_2d_lattice_no_step()
 
         elif self.step_model == 'single-step':
@@ -123,29 +110,26 @@ class Dot2D:
 
     def _generate_2d_lattice_no_step(self):
         """
-        Returns a 2D square lattice with a no steps, of dimensions nx by len(si_concentrations).
+        Generates a 2D square lattice with a no steps, of dimensions nx by len(si_concentrations).
         This lattice contains no alloy disorder
         """
 
-        lattice = np.zeros((self.nx, self.n_layers))
+        lattice = np.zeros((self.nx, len(self.si_concentrations)))
 
         for i in range(self.nx):
-            for k in range(self.n_layers):
+            for k in range(len(self.si_concentrations)):
                 xk = self.si_concentrations[k]
-                if self.disorder_model == 'alloy':
-                    lattice[i,k] = np.random.binomial(self._n_eff_y, xk)/self._n_eff_y
-                elif self.disorder_model == 'none':
-                    lattice[i,k] = xk
+                lattice[i,k] = xk
 
         self.effective_lattice = lattice
 
 
     def _generate_2d_lattice_single_step(self):
         """
-        Returns a 2D square lattice with a single step, of dimensions nx by len(si_concentrations)-1
+        Generates a 2D square lattice with a single step, of dimensions nx by len(si_concentrations)-1
         """
 
-        nz = self.n_layers - abs(self._step_magnitudes)
+        nz = len(self.si_concentrations) - abs(self._step_magnitudes)
         lattice = np.zeros((self.nx, nz))
 
         if self._step_magnitudes > 0:
@@ -168,13 +152,7 @@ class Dot2D:
                     else:
                         xk = self.si_concentrations[k]
 
-                if self.disorder_model == 'alloy':
-                    #lattice[i,k] = np.random.binomial(self._n_eff_y, xk)/self._n_eff_y
-                    var_si = self._n_eff_y * (xk * (1 - xk))
-                    lattice[i,k] = xk + np.random.normal(0, np.sqrt(var_si)) / self._n_eff_y
-
-                elif self.disorder_model == 'none':
-                    lattice[i,k] = xk
+                lattice[i,k] = xk
 
         self.effective_lattice = lattice
 
@@ -186,7 +164,7 @@ class Dot2D:
 
         total_step_offset = int(np.sum(self._step_magnitudes))
 
-        accumulated_offset = np.array([np.sum(self._step_magnitudes[:l]) for l in range(len(self._step_location_list))]).astype(int)
+        accumulated_offset = np.array([np.sum(self._step_magnitudes[:l+1]) for l in range(len(self._step_location_list))]).astype(int)
         max_offset = accumulated_offset[np.argmax(np.abs(accumulated_offset))]
 
         nz = len(self.si_concentrations) - (max_offset)
@@ -213,15 +191,29 @@ class Dot2D:
                 if not plateau_found:
                     xk = self.si_concentrations[k + total_step_offset - max_offset]
 
-                if self.disorder_model == 'alloy':
-                    #lattice[i,k] = np.random.binomial(self._n_eff_y, xk)/self._n_eff_y
-                    var_si = self._n_eff_y * (xk * (1 - xk))
-                    lattice[i,k] = xk + np.random.normal(0, np.sqrt(var_si)) / self._n_eff_y
-
-                elif self.disorder_model == 'none':
-                    lattice[i,k] = xk
+                lattice[i,k] = xk
 
         self.effective_lattice = lattice
+
+
+    def generate_random_alloy_lattice(self, dot_radius_nm_y):
+        omega = constants.HBAR / constants.SI_TRANSVERSE_MASS / (1e-9 * dot_radius_nm_y)**2
+
+        #omega = y_orbital_spacing * constants.ELEMENTARY_CHARGE / constants.HBAR
+        #ay = np.sqrt(constants.HBAR / constants.SI_TRANSVERSE_MASS / omega)
+        self._n_eff_y = 2 * np.sqrt(2 * np.pi) * (1e-9 * dot_radius_nm_y) * self.dx / constants.SI_LATTICE_CONSTANT**2
+        random_lattice = np.zeros_like(self.effective_lattice)
+
+        (nx, nz) = np.shape(random_lattice)
+
+        for i in range(nx):
+            for j in range(nz):
+                xk = self.effective_lattice[i,j]
+                var_si = self._n_eff_y * (xk * (1 - xk))
+                random_lattice[i,j] = xk + np.random.normal(0, np.sqrt(var_si)) / self._n_eff_y
+
+        return random_lattice
+
 
 
 
