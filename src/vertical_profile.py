@@ -23,7 +23,7 @@ class VerticalProfile:
     wiggle_amplitude: float = 0.0
     wiggle_period_nm: float = 1.6
 
-    interface_type_list = ['sharp', 'linear-wall', 'smoothed-linear-wall', 'sigmoid', 'wiggle-well']
+    interface_type_list = ['sharp', 'linear-wall', 'smoothed-linear-wall', 'sigmoid']
 
     def __post_init__(self):
 
