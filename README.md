@@ -8,4 +8,6 @@ The effective mass model accounts for the curvature of the conduction band minim
 
 Examples of heterostructures and system solutions in 1D, 2D, and 3D are found in the notebooks folder.
 
+To set up, run "pip install -e ." from the base directory.
+
 If you find this code useful and would like to cite it, please cite [Losert et al., Phys. Rev. B 108, 125405](https://doi.org/10.1103/PhysRevB.108.125405).
