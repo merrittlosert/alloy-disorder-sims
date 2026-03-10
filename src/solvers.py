@@ -7,7 +7,6 @@ import numpy as np
 import scipy.linalg as la
 import scipy.sparse.linalg as las
 from math import *
-from scipy.stats import rice, rayleigh
 
 import constants
 import helpers.solver_helpers as helpers
@@ -710,7 +709,6 @@ class EffectiveMass(BaseSolver):
         self.nn_coupling_z = -constants.HBAR**2 / (2 * constants.SI_LATERAL_MASS * self.dz**2) / constants.ELEMENTARY_CHARGE
 
         self._inter_valley_coupling = None
-        self._sigma_delta = None
 
 
     def _compute_valley_splitting(self):
@@ -727,39 +725,12 @@ class EffectiveMass(BaseSolver):
     @property
     def inter_valley_coupling(self):
         """
-        Lazily compute the inter-valley coupling using EM theory
+        Lazily compute the inter-valley coupling using EM theory, given the effective_lattice of Si concentrations.
         """
         if self._inter_valley_coupling is None:
             self._compute_inter_valley_coupling()
         return self._inter_valley_coupling
     
-    def sigma_delta(self, dot_size_nm):
-        """
-        Compute sigma_delta given the dot size (equal to sqrt(HBAR / SI_TRANSVERSE_MASS / omega))
-        """
-        return self._compute_sigma_delta(dot_size_nm)
-  
-
-    def valley_splitting_pdf(self, Ev_arr, dot_size_nm):
-        """
-        Returns the Rayleigh/Rice pdfs of valley splittings for a given array of values Ev_arr (eV) and dot size (nm).
-        """
-        sd = self.sigma_delta(dot_size_nm)
-        Ev0 = 2 * abs(self.inter_valley_coupling)
-        s = sd * np.sqrt(2)
-
-        eps = 1e-7
-        if Ev0 < eps:
-            # if the inter-valley coupling is zero, then the valley splitting is just Rayleigh distributed
-            pdf_arr = rayleigh.pdf(Ev_arr, scale=s)
-            return pdf_arr
-
-        else:
-            pdf_arr = rice.pdf(Ev_arr, b=Ev0/s, scale=s)
-
-        return pdf_arr
-    
-
         
 
 
@@ -812,15 +783,21 @@ class EffectiveMass_1D(EffectiveMass):
         return coupling
     
     
-    def _compute_sigma_delta(self, dot_size_nm):
+    def sigma_delta(self, dot_size_nm_x: float, dot_size_nm_y: float):
         """
-        Computing the standard deviation of the inter-valley coupling.
+        Compute sigma_delta given the dot sizes in x and y (equal to sqrt(HBAR / SI_TRANSVERSE_MASS / omega_x(y))).
+
+        Note: for the most accurate results, the input lattice should be smooth.
+        For these calculations, we assume self.effective_lattice respresents an expected Si
+        concentration at each lattice site. If the input lattice contains disorder, results for
+        sigma_delta will be slightly elevated.
         """
         _, v0 = self.solve(n_lowest_eigenstates=1)
         psi_0 = np.abs(v0[:,0])
 
-        concs = self.effective_lattice
+        dot_size_nm = np.sqrt(dot_size_nm_x * dot_size_nm_y)
 
+        concs = self.effective_lattice
         delta_conc = self.well_si_concentration - self.bulk_si_concentration
         c = (1/np.pi) * ((constants.SI_LATTICE_CONSTANT**2 * self.cb_offset) / (8 * 1e-9 * dot_size_nm * delta_conc))**2 
         sd = np.sqrt( c * np.sum( psi_0**4 * concs * (1-concs) ) )
@@ -946,12 +923,28 @@ class EffectiveMass_2D(EffectiveMass):
         return coupling
     
     
-    def _compute_sigma_delta(self, dot_size_nm):
+    def sigma_delta(self, dot_size_nm_y: float):
         """
-        Computing the standard deviation of the inter-valley coupling.
+        Compute sigma_delta given the dot size in y (equal to sqrt(HBAR / SI_TRANSVERSE_MASS / omega)).
         """
-       
-        raise NotImplementedError("Not yet implemented")
+
+        _, v0 = self.solve(n_lowest_eigenstates=1)
+        psi_0 = self.wf_2D_matrix_from_vector(np.abs(v0[:,0]))
+
+        # Effective "number of atoms" per unit cell after averaging along y
+        n_eff_y = 2 * np.sqrt(2 * np.pi) * (1e-9 * dot_size_nm_y) * self.dx / constants.SI_LATTICE_CONSTANT**2
+        concs = self.effective_lattice
+
+        # Variance of Si conc. at each site
+        var_Si = concs * (1 - concs) / n_eff_y 
+
+        # Variance of potential at each site
+        var_U = var_Si * (self.cb_offset / (self.well_si_concentration - self.bulk_si_concentration))**2 
+
+        # Variance of Delta
+        vd = (self.dx * self.dz)**2 * np.sum( psi_0**4 * var_U )
+
+        return np.sqrt(vd)
     
 
     def _normalize(self, evecs):
@@ -1095,12 +1088,25 @@ class EffectiveMass_3D(EffectiveMass):
         return coupling
     
     
-    def _compute_sigma_delta(self, dot_size_nm):
+    def sigma_delta(self):
         """
         Computing the standard deviation of the inter-valley coupling.
+
+        Since we have the 3D model, we don't need to specify the dot size. 
         """
-       
-        raise NotImplementedError("Not yet implemented")
+        _, v0 = self.solve(n_lowest_eigenstates=1)
+        psi_0 = self.wf_3D_matrix_from_vector(v0[:,0])
+
+        # In Si, there are two atoms per layer per unit cell
+        nc = 2 * (self.dx * self.dy) / (constants.SI_LATTICE_CONSTANT**2)
+
+        # Variance of the potential at each lattice site
+        var_U = (1/nc) * (self.cb_offset / (self.well_si_concentration - self.bulk_si_concentration))**2 * self.effective_lattice * (1 - self.effective_lattice)
+
+        # Variance of Delta
+        vd = (self.dx * self.dy * self.dz)**2 * np.sum( psi_0**4 * var_U )
+
+        return np.sqrt(vd)
     
 
     def _normalize(self, evecs):
